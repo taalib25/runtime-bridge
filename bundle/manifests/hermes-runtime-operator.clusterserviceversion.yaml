@@ -16,7 +16,7 @@ metadata:
       \n        }\n      },\n      \"soul\": \"# Hermes Runtime\\n\\nYou are a helpful\
       \ assistant.\"\n    }\n  }\n]\n"
     capabilities: Basic Install
-    createdAt: '2026-04-19T10:18:36Z'
+    createdAt: '2026-04-19T11:39:14Z'
     operators.operatorframework.io/builder: operator-sdk-v1.42.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: hermes-runtime-operator.v0.1.0

@@ -6,5 +6,5 @@ resources:
 - api-secret.yaml
 images:
 - name: controller
-  newName: hermes-runtime-operator
+  newName: controller
   newTag: latest
