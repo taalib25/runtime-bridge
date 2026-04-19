@@ -1,153 +1,205 @@
 # Hermes Agent Documentation
 
-Complete reference guide for configuring, deploying, and operating Hermes Agent in Kubernetes environments.
+Complete documentation for Hermes Agent configuration, deployment, and security.
 
-## Quick Navigation
-
-### 🚀 Getting Started
-- **[Quick Start](./guides/QUICK_START.md)** — Deploy Hermes in 5 minutes
-- **[Deployment Guide](./deployment/DEPLOYMENT_GUIDE.md)** — Kubernetes & Helm deployment patterns
-
-### ⚙️ Configuration
-- **[Configuration Reference](./configuration/CONFIG_REFERENCE.md)** — Complete `config.yaml` and `.env` reference
-- **[Environment Variables](./configuration/ENVIRONMENT_VARIABLES.md)** — 60+ variables across 9 categories
-- **[SOUL.md Customization](./configuration/SOUL_CUSTOMIZATION.md)** — Agent personality and behavior
-
-### 📱 Messaging & Integration
-- **[Messaging Platforms](./guides/MESSAGING_PLATFORMS.md)** — Setup for 15+ platforms (Telegram, Discord, Slack, WhatsApp, etc.)
-- **[Gateway Configuration](./configuration/GATEWAY_CONFIGURATION.md)** — Security, allowlists, and user management
-- **[API Server & Open WebUI](./guides/API_SERVER_INTEGRATION.md)** — OpenAI-compatible API setup
-
-### 🛠️ Tools & Skills
-- **[Tools Reference](./reference/TOOLS_REFERENCE.md)** — 47+ built-in tools with enable/disable patterns
-- **[Toolsets Guide](./guides/TOOLSETS_GUIDE.md)** — Organizing and managing tool collections
-
-### 📊 Production & Operations
-- **[Production Deployment](./deployment/PRODUCTION_DEPLOYMENT.md)** — Security hardening, multi-user, backup/recovery
-- **[Troubleshooting](./guides/TROUBLESHOOTING.md)** — Common issues and solutions
-- **[Best Practices](./guides/BEST_PRACTICES.md)** — Operational guidelines
-
-### 📚 Reference
-- **[Helm Chart Reference](./reference/HELM_CHART_REFERENCE.md)** — Chart values and customization
-- **[Terminal Backends](./reference/TERMINAL_BACKENDS.md)** — Local, Docker, SSH, Modal, Daytona, Singularity
-- **[Chat Commands](./reference/CHAT_COMMANDS.md)** — Built-in commands and shortcuts
-
-## Documentation Structure
+## 📚 Documentation Structure
 
 ```
 docs/
-├── README.md (this file)
-├── configuration/
-│   ├── CONFIG_REFERENCE.md          # config.yaml structure
-│   ├── ENVIRONMENT_VARIABLES.md     # .env and env vars
-│   ├── SOUL_CUSTOMIZATION.md        # Personality/behavior
-│   └── GATEWAY_CONFIGURATION.md     # Security & allowlists
-├── deployment/
-│   ├── DEPLOYMENT_GUIDE.md          # Kubernetes & Helm
-│   ├── PRODUCTION_DEPLOYMENT.md     # Security & operations
-│   └── KIND_CLUSTER_SETUP.md        # Kind-specific setup
-├── guides/
-│   ├── QUICK_START.md               # 5-minute setup
-│   ├── MESSAGING_PLATFORMS.md       # Platform setup (15+)
-│   ├── API_SERVER_INTEGRATION.md    # Open WebUI integration
-│   ├── TOOLSETS_GUIDE.md            # Tool management
-│   ├── TROUBLESHOOTING.md           # Common issues
-│   └── BEST_PRACTICES.md            # Operational guidelines
-└── reference/
-    ├── TOOLS_REFERENCE.md           # 47+ tools catalog
-    ├── HELM_CHART_REFERENCE.md      # Chart values
-    ├── TERMINAL_BACKENDS.md         # Backend options
-    └── CHAT_COMMANDS.md             # Command reference
+├── README.md                          # This file
+├── configuration/                     # Configuration guides
+│   ├── CONFIG_REFERENCE.md           # Complete config reference
+│   ├── GATEWAY_CONFIGURATION.md      # Gateway & security settings
+│   ├── ENVIRONMENT_VARIABLES.md      # All environment variables
+│   └── SOUL_CUSTOMIZATION.md         # Agent personality customization
+├── deployment/                        # Deployment guides
+│   ├── DEPLOYMENT_GUIDE.md           # Deployment procedures
+│   └── QUICK_START.md                # Quick start guide
+├── guides/                            # How-to guides
+│   ├── API_SERVER_INTEGRATION.md     # API server setup
+│   ├── MESSAGING_PLATFORMS.md        # Messaging platform setup
+│   └── QUICK_START.md                # Quick start
+├── reference/                         # Reference documentation
+│   ├── SKILLS_COMPREHENSIVE_GUIDE.md # Skills reference
+│   ├── SKILLS_QUICK_REFERENCE.md     # Skills quick ref
+│   ├── TOOLS_INDEX.md                # Tools index
+│   ├── TOOLS_REFERENCE.md            # Tools reference
+│   └── TOOL_PARAMETERS_SCHEMA.md     # Tool parameters
+└── security/                          # Security documentation
+    ├── README.md                      # Security quick reference
+    └── SECURITY_AND_BACKEND_COMPREHENSIVE.md  # Comprehensive security guide
 ```
 
-## Key Information
+## 🔐 Security Documentation
 
-### Current Version
-- **Release**: v0.10.0 (April 16, 2026)
-- **Latest Feature**: Tool Gateway for Nous Portal subscribers
-- **Python**: 3.11+ required
+### Quick Links
 
-### Critical Configuration Files
-| File | Location | Purpose |
-|------|----------|---------|
-| `config.yaml` | `~/.hermes/config.yaml` | Main settings (model, terminal, memory, tools) |
-| `.env` | `~/.hermes/.env` | Secrets (API keys, bot tokens) |
-| `SOUL.md` | `~/.hermes/SOUL.md` | Agent personality and behavior |
-| `gateway.json` | `~/.hermes/gateway.json` | Gateway policies and platform settings |
-| `MEMORY.md` | `~/.hermes/memories/MEMORY.md` | Persistent memory |
-| `USER.md` | `~/.hermes/memories/USER.md` | User information |
+- **[Security Quick Reference](./security/README.md)** — Fast lookup for security settings
+- **[Comprehensive Security Guide](./security/SECURITY_AND_BACKEND_COMPREHENSIVE.md)** — Exhaustive documentation of all 15 security features
 
-### Supported Messaging Platforms (15+)
-Telegram, Discord, Slack, WhatsApp, Signal, SMS, Email, Matrix, Mattermost, Feishu/Lark, WeCom, Weixin, DingTalk, BlueBubbles, QQ
+### Security Features Documented
 
-### Terminal Backends
-Local, Docker, SSH, Modal, Daytona, Singularity
+1. ✅ Dangerous Command Approval System
+2. ✅ YOLO Mode
+3. ✅ Command Allowlist
+4. ✅ Container Isolation & Docker Security
+5. ✅ Terminal Backends (6 types)
+6. ✅ Environment Variable Passthrough
+7. ✅ Credential File Passthrough
+8. ✅ MCP Credential Handling
+9. ✅ SSRF Protection
+10. ✅ Tirith Pre-Exec Scanning
+11. ✅ Context File Injection Protection
+12. ✅ Website Blocklist
+13. ✅ Privacy Settings & PII Redaction
+14. ✅ Group Session Isolation
+15. ✅ Unauthorized DM Behavior
 
-### Built-in Tools (47+)
-Across 8 categories: Web, Code, System, Data, Communication, Productivity, AI, Custom
+## ⚙️ Configuration Documentation
 
-## Installation
+### Quick Links
 
-### One-Liner
-```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-```
+- **[Configuration Reference](./configuration/CONFIG_REFERENCE.md)** — Complete config.yaml reference
+- **[Gateway Configuration](./configuration/GATEWAY_CONFIGURATION.md)** — Messaging platform setup
+- **[Environment Variables](./configuration/ENVIRONMENT_VARIABLES.md)** — All environment variables
+- **[SOUL Customization](./configuration/SOUL_CUSTOMIZATION.md)** — Agent personality
 
-### Manual Installation
-```bash
-pip install hermes-agent
-hermes init
-hermes start
-```
+### Key Configuration Topics
 
-### Kubernetes/Helm
-```bash
-git clone https://github.com/ultraworkers/hermes-agent-helm-chart.git
-cd hermes-agent-helm-chart
-helm install hermes . --namespace hermes --create-namespace -f values.yaml
-```
+- Model configuration (providers, routing, fallback)
+- Terminal backend configuration (local, docker, ssh, modal, daytona, singularity)
+- Memory configuration (short-term, long-term, hybrid)
+- Gateway configuration (Telegram, Discord, Slack, etc.)
+- Approval system configuration
+- Security settings
+- Logging configuration
 
-## Common Tasks
+## 🚀 Deployment Documentation
 
-### Deploy Hermes in Kind Cluster
-See: [Quick Start](./guides/QUICK_START.md) → [Deployment Guide](./deployment/DEPLOYMENT_GUIDE.md)
+### Quick Links
 
-### Configure Telegram Bot
-See: [Messaging Platforms](./guides/MESSAGING_PLATFORMS.md) → Telegram section
+- **[Deployment Guide](./deployment/DEPLOYMENT_GUIDE.md)** — Full deployment procedures
+- **[Quick Start](./guides/QUICK_START.md)** — Get started in 5 minutes
 
-### Set Up API Server with Open WebUI
-See: [API Server Integration](./guides/API_SERVER_INTEGRATION.md)
+### Deployment Topics
 
-### Customize Agent Personality
-See: [SOUL.md Customization](./configuration/SOUL_CUSTOMIZATION.md)
+- Installation
+- Configuration setup
+- Gateway setup
+- Security configuration
+- Monitoring and logging
+- Troubleshooting
 
-### Enable/Disable Tools
-See: [Tools Reference](./reference/TOOLS_REFERENCE.md) → Configuration section
+## 🛠️ Integration Guides
 
-### Production Hardening
-See: [Production Deployment](./deployment/PRODUCTION_DEPLOYMENT.md)
+### Quick Links
 
-## External Resources
+- **[API Server Integration](./guides/API_SERVER_INTEGRATION.md)** — REST API setup
+- **[Messaging Platforms](./guides/MESSAGING_PLATFORMS.md)** — Platform-specific setup
 
-- **Official Website**: https://hermes-agent.nousresearch.com/
-- **Official Docs**: https://hermes-agent.nousresearch.com/docs/
-- **GitHub**: https://github.com/NousResearch/hermes-agent
-- **Helm Chart**: https://github.com/ultraworkers/hermes-agent-helm-chart
-- **Discord Community**: https://discord.gg/NousResearch
-- **Skills Hub**: https://agentskills.io
+## 📖 Reference Documentation
 
-## Support
+### Quick Links
 
-- **Issues**: https://github.com/NousResearch/hermes-agent/issues
-- **Discussions**: https://github.com/NousResearch/hermes-agent/discussions
-- **Discord**: https://discord.gg/NousResearch
+- **[Skills Comprehensive Guide](./reference/SKILLS_COMPREHENSIVE_GUIDE.md)** — All available skills
+- **[Skills Quick Reference](./reference/SKILLS_QUICK_REFERENCE.md)** — Quick skill lookup
+- **[Tools Index](./reference/TOOLS_INDEX.md)** — All available tools
+- **[Tools Reference](./reference/TOOLS_REFERENCE.md)** — Tool documentation
+- **[Tool Parameters Schema](./reference/TOOL_PARAMETERS_SCHEMA.md)** — Tool parameter schemas
 
-## License
+## 🎯 Getting Started
 
-Hermes Agent is open source. See the main repository for license details.
+### For New Users
+
+1. Start with [Quick Start Guide](./guides/QUICK_START.md)
+2. Review [Configuration Reference](./configuration/CONFIG_REFERENCE.md)
+3. Set up your messaging platform from [Messaging Platforms](./guides/MESSAGING_PLATFORMS.md)
+4. Configure security from [Security Quick Reference](./security/README.md)
+
+### For Operators
+
+1. Review [Deployment Guide](./deployment/DEPLOYMENT_GUIDE.md)
+2. Configure security from [Comprehensive Security Guide](./security/SECURITY_AND_BACKEND_COMPREHENSIVE.md)
+3. Set up monitoring and logging
+4. Review security checklist regularly
+
+### For Developers
+
+1. Review [API Server Integration](./guides/API_SERVER_INTEGRATION.md)
+2. Reference [Tools Reference](./reference/TOOLS_REFERENCE.md)
+3. Review [Skills Comprehensive Guide](./reference/SKILLS_COMPREHENSIVE_GUIDE.md)
+4. Check [Tool Parameters Schema](./reference/TOOL_PARAMETERS_SCHEMA.md)
+
+## 📋 Configuration Checklist
+
+Before deploying to production:
+
+- [ ] Review [Security Quick Reference](./security/README.md)
+- [ ] Configure approval system
+- [ ] Set up terminal backend
+- [ ] Configure messaging platforms
+- [ ] Enable security features
+- [ ] Set up logging
+- [ ] Configure monitoring
+- [ ] Test all features
+- [ ] Review security checklist
+
+## 🔍 Finding What You Need
+
+### By Topic
+
+| Topic | Document |
+|-------|----------|
+| Approval system | [Security Guide](./security/SECURITY_AND_BACKEND_COMPREHENSIVE.md#dangerous-command-approval-system) |
+| Terminal backends | [Security Guide](./security/SECURITY_AND_BACKEND_COMPREHENSIVE.md#terminal-backends) |
+| Docker security | [Security Guide](./security/SECURITY_AND_BACKEND_COMPREHENSIVE.md#container-isolation--docker-security) |
+| SSRF protection | [Security Guide](./security/SECURITY_AND_BACKEND_COMPREHENSIVE.md#ssrf-protection) |
+| PII redaction | [Security Guide](./security/SECURITY_AND_BACKEND_COMPREHENSIVE.md#privacy-settings--pii-redaction) |
+| Messaging setup | [Messaging Platforms](./guides/MESSAGING_PLATFORMS.md) |
+| API integration | [API Server Integration](./guides/API_SERVER_INTEGRATION.md) |
+| Skills | [Skills Guide](./reference/SKILLS_COMPREHENSIVE_GUIDE.md) |
+| Tools | [Tools Reference](./reference/TOOLS_REFERENCE.md) |
+
+### By Use Case
+
+| Use Case | Start Here |
+|----------|-----------|
+| Quick setup | [Quick Start](./guides/QUICK_START.md) |
+| Production deployment | [Deployment Guide](./deployment/DEPLOYMENT_GUIDE.md) |
+| Security hardening | [Security Guide](./security/SECURITY_AND_BACKEND_COMPREHENSIVE.md) |
+| Messaging integration | [Messaging Platforms](./guides/MESSAGING_PLATFORMS.md) |
+| API integration | [API Server Integration](./guides/API_SERVER_INTEGRATION.md) |
+| Custom configuration | [Configuration Reference](./configuration/CONFIG_REFERENCE.md) |
+| Skill development | [Skills Guide](./reference/SKILLS_COMPREHENSIVE_GUIDE.md) |
+
+## 📞 Support
+
+For issues or questions:
+
+1. Check the relevant documentation section
+2. Review troubleshooting guides
+3. Check logs in `~/.hermes/logs/`
+4. Review configuration in `~/.hermes/config.yaml`
+
+## 📝 Documentation Standards
+
+All documentation includes:
+
+- ✅ Overview and purpose
+- ✅ Configuration examples
+- ✅ Environment variables
+- ✅ Best practices
+- ✅ Troubleshooting
+- ✅ Related documentation links
+
+## 🔄 Documentation Updates
+
+Documentation is updated regularly. Check the "Last Updated" date in each document.
+
+Current version: **April 18, 2026**  
+Hermes version: **v0.10.0+**
 
 ---
 
-**Last Updated**: April 18, 2026  
-**Documentation Version**: 1.0  
-**Hermes Version**: v0.10.0
+**Last Updated:** April 18, 2026  
+**Version:** 1.0

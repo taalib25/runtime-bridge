@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: hermes-runtime-operator
+  name: hermes-runtime-operator-runtime-api
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: api
+  selector:
+    app.kubernetes.io/name: hermes-runtime-operator
+    control-plane: controller-manager
+  type: ClusterIP
+status:
+  loadBalancer: {}

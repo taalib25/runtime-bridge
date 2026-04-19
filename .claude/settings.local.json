@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh api *)",
+      "Bash(gh repo *)",
+      "WebFetch(domain:registry.hub.docker.com)",
+      "WebFetch(domain:hub.docker.com)",
+      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/values.yaml)",
+      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/templates/deployment.yaml)",
+      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/templates/configmap.yaml)",
+      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/chart/values.yaml)",
+      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/README.md)",
+      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/chart/templates/deployment.yaml)",
+      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/chart/templates/configmap.yaml)"
+    ]
+  }
+}

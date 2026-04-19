@@ -1,0 +1,15 @@
+apiVersion: v2
+name: hermes-runtime-operator
+description: A Helm chart to distribute hermes-runtime-operator
+type: application
+
+version: 0.1.0
+appVersion: "0.1.0"
+icon: https://raw.githubusercontent.com/hermeshq/hermes-runtime-operator/main/docs/assets/operator-icon.svg
+
+keywords:
+  - kubernetes
+  - operator
+
+annotations:
+  kubebuilder.io/generated-by: kubebuilder

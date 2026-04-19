@@ -1,0 +1,4 @@
+resources:
+- bases/hermes-runtime-operator.clusterserviceversion.yaml
+- ../default
+- ../samples

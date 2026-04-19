@@ -1,0 +1,225 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: "[\n  {\n    \"apiVersion\": \"hermes.hermeshq.net/v1alpha1\",\n\
+      \    \"kind\": \"Runtime\",\n    \"metadata\": {\n      \"name\": \"sample-runtime\"\
+      \n    },\n    \"spec\": {\n      \"tenantId\": \"sample-tenant\",\n      \"\
+      runtimeId\": \"sample-runtime\",\n      \"image\": \"nousresearch/hermes-agent:latest\"\
+      ,\n      \"plan\": {\n        \"cpuMillis\": 1000,\n        \"memoryMi\": 2048\n\
+      \      },\n      \"storage\": {\n        \"sizeGi\": 10,\n        \"storageClassName\"\
+      : \"local-path\"\n      },\n      \"network\": {\n        \"mode\": \"subdomain\"\
+      ,\n        \"host\": \"hermeshq.net\",\n        \"subdomain\": \"sample-runtime\"\
+      ,\n        \"ingressClassName\": \"traefik\"\n      },\n      \"config\": {\n\
+      \        \"model\": {\n          \"provider\": \"auto\",\n          \"default\"\
+      : \"anthropic/claude-opus-4.6\",\n          \"base_url\": \"https://openrouter.ai/api/v1\"\
+      \n        }\n      },\n      \"soul\": \"# Hermes Runtime\\n\\nYou are a helpful\
+      \ assistant.\"\n    }\n  }\n]\n"
+    capabilities: Basic Install
+    createdAt: '2026-04-19T10:18:36Z'
+    operators.operatorframework.io/builder: operator-sdk-v1.42.0
+    operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+  name: hermes-runtime-operator.v0.1.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: Represents a single Hermes agent runtime and the desired configuration
+        used to reconcile its Kubernetes workload and public endpoint.
+      displayName: Hermes Runtime
+      kind: Runtime
+      name: runtimes.hermes.hermeshq.net
+      version: v1alpha1
+  description: 'Hermes Runtime Operator manages per-runtime Hermes agent workloads
+    through a Runtime custom resource.
+
+    It reconciles Deployments, Services, Ingresses, PVCs, ConfigMaps, and managed
+    Secrets while exposing
+
+    a compatibility HTTP API that external backends can use for runtime lifecycle
+    operations.
+
+    '
+  displayName: Hermes Runtime Operator
+  icon:
+  - base64data: PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMxMTE4MjciLz48cGF0aCBkPSJNMTggMTRoMTB2MTdoOFYxNGgxMHYzNkgzNlY0MGgtOHYxMEgxOHoiIGZpbGw9IiM2MEE1RkEiLz48L3N2Zz4=
+    mediatype: image/svg+xml
+  install:
+    spec:
+      clusterPermissions:
+      - rules:
+        - apiGroups:
+          - ''
+          resources:
+          - configmaps
+          - persistentvolumeclaims
+          - secrets
+          - services
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - ''
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
+        - apiGroups:
+          - apps
+          resources:
+          - deployments
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - hermes.hermeshq.net
+          resources:
+          - runtimes
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - hermes.hermeshq.net
+          resources:
+          - runtimes/finalizers
+          verbs:
+          - update
+        - apiGroups:
+          - hermes.hermeshq.net
+          resources:
+          - runtimes/status
+          verbs:
+          - get
+          - patch
+          - update
+        - apiGroups:
+          - networking.k8s.io
+          resources:
+          - ingresses
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        serviceAccountName: hermes-runtime-operator-controller-manager
+      deployments:
+      - label:
+          app.kubernetes.io/managed-by: kustomize
+          app.kubernetes.io/name: hermes-runtime-operator
+          control-plane: controller-manager
+        name: hermes-runtime-operator-controller-manager
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: hermes-runtime-operator
+              control-plane: controller-manager
+          strategy: {}
+          template:
+            metadata:
+              annotations:
+                kubectl.kubernetes.io/default-container: manager
+              labels:
+                app.kubernetes.io/name: hermes-runtime-operator
+                control-plane: controller-manager
+            spec:
+              containers:
+              - args:
+                - --metrics-bind-address=:8443
+                - --leader-elect
+                - --health-probe-bind-address=:8081
+                command:
+                - /manager
+                env:
+                - name: CONTROLLER_SHARED_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      key: CONTROLLER_SHARED_SECRET
+                      name: hermes-runtime-operator-controller-manager-api-secret
+                image: hermes-runtime-operator:latest
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8081
+                  initialDelaySeconds: 15
+                  periodSeconds: 20
+                name: manager
+                ports:
+                - containerPort: 8080
+                  name: api
+                  protocol: TCP
+                - containerPort: 8443
+                  name: https
+                  protocol: TCP
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 8081
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                resources:
+                  limits:
+                    cpu: 500m
+                    memory: 128Mi
+                  requests:
+                    cpu: 10m
+                    memory: 64Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                    - ALL
+                  readOnlyRootFilesystem: true
+              securityContext:
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              serviceAccountName: hermes-runtime-operator-controller-manager
+              terminationGracePeriodSeconds: 10
+    strategy: deployment
+  installModes:
+  - supported: true
+    type: OwnNamespace
+  - supported: true
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - hermes
+  - runtime
+  - operator
+  - ai-agent
+  links:
+  - name: Hermes Runtime Operator
+    url: https://github.com/hermeshq/hermes-runtime-operator
+  maintainers:
+  - email: opensource@hermeshq.net
+    name: HermesHQ
+  maturity: alpha
+  minKubeVersion: 1.30.0
+  provider:
+    name: HermesHQ
+    url: https://hermeshq.net
+  version: 0.1.0

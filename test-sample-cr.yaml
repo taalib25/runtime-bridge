@@ -1,0 +1,25 @@
+apiVersion: hermes.hermeshq.net/v1alpha1
+kind: Runtime
+metadata:
+  name: test-runtime-001
+  namespace: hermes-prod
+spec:
+  tenantId: "test-tenant"
+  runtimeId: "test-runtime-001"
+  image: "nousresearch/hermes-agent:latest"
+  plan:
+    cpuMillis: 1000
+    memoryMi: 2048
+  storage:
+    sizeGi: 10
+    storageClassName: "local-path"
+  network:
+    mode: "subdomain"
+    host: "hermeshq.net"
+    subdomain: "test-runtime-001"
+    ingressClassName: "traefik"
+  config:
+    model:
+      provider: auto
+      default: anthropic/claude-opus-4.6
+      base_url: https://openrouter.ai/api/v1

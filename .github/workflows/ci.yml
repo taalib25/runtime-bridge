@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Install tools
+      run: |
+        make kustomize
+        make controller-gen
+        make golangci-lint
+        # Install operator-sdk
+        curl -L https://github.com/operator-framework/operator-sdk/releases/download/v1.42.0/operator-sdk_linux_amd64 -o ./operator-sdk
+        chmod +x ./operator-sdk
+        sudo mv ./operator-sdk /usr/local/bin/operator-sdk
+        # Install opm
+        curl -L https://github.com/operator-framework/operator-registry/releases/download/v1.51.0/linux-amd64-opm -o ./opm
+        chmod +x ./opm
+        sudo mv ./opm /usr/local/bin/opm
+        # Install helm
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+    - name: Install dependencies
+      run: go mod tidy
+
+    - name: Run tests
+      run: go test ./...
+
+    - name: Run linters
+      run: make lint
+
+    - name: Build installer
+      run: make build-installer
+
+    - name: Build bundle
+      run: make bundle IMG=hermes-runtime-operator:test VERSION=0.1.0 CHANNELS=alpha DEFAULT_CHANNEL=alpha
+
+    - name: Validate bundle
+      run: make bundle-validate
+
+    - name: Run scorecard
+      run: make scorecard
+
+    - name: Validate catalog
+      run: make catalog
+
+    - name: Validate Helm chart
+      run: make helm-lint
+
+    - name: Template Helm chart
+      run: make helm-template
+
+    - name: Package Helm chart
+      run: make chart-package
+
+    - name: Run full verification
+      run: make verify-packaging

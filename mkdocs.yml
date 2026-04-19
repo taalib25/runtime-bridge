@@ -1,0 +1,126 @@
+site_name: Hermes Agent Documentation
+site_description: Complete guide to Hermes Agent - AI-powered messaging platform integration
+site_author: Nous Research
+site_url: https://hermes-agent.nousresearch.com/docs/
+repo_url: https://github.com/NousResearch/hermes-agent
+repo_name: NousResearch/hermes-agent
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/favicon.ico
+  palette:
+    - scheme: light
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: dark
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.select
+    - content.tabs.link
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+      minify_css: true
+      minify_js: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      use_pygments: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:pymdownx.emoji.twemoji
+      emoji_generator: !!python/name:pymdownx.emoji.to_svg
+  - tables
+  - toc:
+      permalink: true
+  - attr_list
+  - md_in_html
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quick Start: guides/QUICK_START.md
+    - Quick Start Tutorials: guides/QUICK_START_TUTORIALS.md
+    - Installation: guides/INSTALLATION.md
+  - Configuration:
+    - Configuration Reference: configuration/CONFIG_REFERENCE.md
+    - Environment Variables: configuration/ENVIRONMENT_VARIABLES.md
+    - Gateway Configuration: configuration/GATEWAY_CONFIGURATION.md
+    - SOUL Customization: configuration/SOUL_CUSTOMIZATION.md
+  - Messaging Platforms:
+    - Supported Platforms: guides/MESSAGING_PLATFORMS.md
+    - Telegram: guides/MESSAGING_PLATFORMS.md#telegram
+    - Discord: guides/MESSAGING_PLATFORMS.md#discord
+    - Slack: guides/MESSAGING_PLATFORMS.md#slack
+    - WhatsApp: guides/MESSAGING_PLATFORMS.md#whatsapp
+    - Signal: guides/MESSAGING_PLATFORMS.md#signal
+    - Email: guides/MESSAGING_PLATFORMS.md#email
+    - SMS: guides/MESSAGING_PLATFORMS.md#sms
+    - Matrix: guides/MESSAGING_PLATFORMS.md#matrix
+    - Mattermost: guides/MESSAGING_PLATFORMS.md#mattermost
+    - Feishu/Lark: guides/MESSAGING_PLATFORMS.md#feishulark
+    - WeCom: guides/MESSAGING_PLATFORMS.md#wecom
+    - Weixin (WeChat): guides/MESSAGING_PLATFORMS.md#weixin-wechat
+    - DingTalk: guides/MESSAGING_PLATFORMS.md#dingtalk
+    - BlueBubbles: guides/MESSAGING_PLATFORMS.md#bluebubbles
+    - QQ Bot: guides/MESSAGING_PLATFORMS.md#qq-bot
+    - Home Assistant: guides/MESSAGING_PLATFORMS.md#home-assistant
+  - API & Integration:
+    - API Server Integration: guides/API_SERVER_INTEGRATION.md
+    - Open WebUI: guides/API_SERVER_INTEGRATION.md#open-webui-integration
+  - Deployment:
+    - Deployment Guide: deployment/DEPLOYMENT_GUIDE.md
+    - Production Deployment: deployment/PRODUCTION_DEPLOYMENT.md
+  - Operations:
+    - Best Practices: guides/BEST_PRACTICES.md
+    - Troubleshooting: guides/TROUBLESHOOTING.md
+  - Reference:
+    - Tools Reference: reference/TOOLS_REFERENCE.md
+    - Tools Index: reference/TOOLS_INDEX.md
+    - Skills Guide: reference/SKILLS_COMPREHENSIVE_GUIDE.md
+    - Skills Quick Reference: reference/SKILLS_QUICK_REFERENCE.md
+    - Documentation Index: reference/DOCUMENTATION_INDEX.md
+  - Platform Integration Index: ../PLATFORM_INTEGRATION_INDEX.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/NousResearch/hermes-agent
+    - icon: fontawesome/brands/discord
+      link: https://discord.gg/NousResearch
+    - icon: fontawesome/brands/twitter
+      link: https://twitter.com/NousResearch
+
+extra_css:
+  - assets/extra.css
+
+extra_javascript:
+  - assets/extra.js
+
+copyright: Copyright &copy; 2026 Nous Research. All rights reserved.
