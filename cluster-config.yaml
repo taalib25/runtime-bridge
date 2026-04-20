@@ -1,0 +1,149 @@
+# Hermes Production Cluster Configuration
+# For use with hetzner-k3s CLI
+#
+# Usage:
+#   hetzner-k3s create --config cluster-config.yaml
+#
+# Prerequisites:
+#   - Hetzner Cloud API token (set HCLOUD_TOKEN env var or in this file)
+#   - SSH key pair at ~/.ssh/id_ed25519
+#
+
+hetzner_token: "${HCLOUD_TOKEN}"  # Set via environment variable
+cluster_name: hermes-production
+kubeconfig_path: "./kubeconfig"
+k3s_version: v1.32.0+k3s1
+
+networking:
+  ssh:
+    port: 22
+    use_agent: false
+    public_key_path: "~/.ssh/id_ed25519.pub"
+    private_key_path: "~/.ssh/id_ed25519"
+  allowed_networks:
+    ssh:
+      - 0.0.0.0/0  # Restrict in production
+    api:
+      - 0.0.0.0/0  # Restrict to your IPs in production
+  public_network:
+    ipv4: true
+    ipv6: true
+  private_network:
+    enabled: true
+    subnet: 10.0.0.0/16
+    existing_network_name: ""
+
+  cni:
+    enabled: true
+    encryption: false
+    mode: flannel  # or cilium for better performance
+
+datastore:
+  mode: etcd  # Default, recommended for HA
+
+schedule_workloads_on_masters: false  # Keep masters for control plane only
+
+# High Availability: 3 masters across different locations
+masters_pool:
+  instance_type: cpx22  # 4 vCPU, 8GB RAM - sufficient for control plane
+  instance_count: 3     # HA requires odd number, 3 is recommended
+  locations:
+    - fsn1  # Falkenstein, Germany
+    - hel1  # Helsinki, Finland
+    - nbg1  # Nuremberg, Germany
+
+# Worker node pools for Hermes workspaces
+worker_node_pools:
+  - name: hermes-workers
+    instance_type: cpx32  # 4 vCPU, 8GB RAM - good for Hermes agents
+    instance_count: 3     # Minimum for production
+    location: fsn1        # Primary location
+    autoscaling:
+      enabled: true
+      min_instances: 2
+      max_instances: 20   # Scale based on workspace demand
+
+  - name: hermes-workers-us
+    instance_type: cpx32
+    instance_count: 0     # Start empty, scale when needed
+    location: ash         # Ashburn, Virginia (US)
+    autoscaling:
+      enabled: true
+      min_instances: 0
+      max_instances: 10
+
+# Addons - all essential for production
+addons:
+  # Hetzner CSI driver - required for persistent storage
+  csi_driver:
+    enabled: true
+    manifest_url: "https://raw.githubusercontent.com/hetznercloud/csi-driver/v2.20.2/deploy/kubernetes/hcloud-csi.yml"
+
+  # Hetzner Cloud Controller Manager - required for LoadBalancer
+  cloud_controller_manager:
+    enabled: true
+    manifest_url: "https://github.com/hetznercloud/hcloud-cloud-controller-manager/releases/download/v1.30.1/ccm-networks.yaml"
+
+  # Traefik ingress - k3s built-in
+  traefik:
+    enabled: true  # Use k3s built-in Traefik
+
+  # ServiceLB - k3s built-in
+  servicelb:
+    enabled: true
+
+  # Metrics server - required for kubectl top and HPA
+  metrics_server:
+    enabled: true
+
+  # Cluster Autoscaler - required for auto-scaling workers
+  cluster_autoscaler:
+    enabled: true
+    manifest_url: "https://raw.githubusercontent.com/kubernetes/autoscaler/master/cluster-autoscaler/cloudprovider/hetzner/examples/cluster-autoscaler-run-on-master.yaml"
+    container_image_tag: "v1.35.0"
+    scan_interval: "10s"
+    scale_down_delay_after_add: "10m"
+    scale_down_delay_after_delete: "10s"
+    scale_down_delay_after_failure: "3m"
+    max_node_provision_time: "15m"
+
+  # System Upgrade Controller - zero-downtime k3s upgrades
+  system_upgrade_controller:
+    enabled: true
+    deployment_manifest_url: "https://github.com/rancher/system-upgrade-controller/releases/download/v0.19.2/system-upgrade-controller.yaml"
+    crd_manifest_url: "https://github.com/rancher/system-upgrade-controller/releases/download/v0.19.2/crd.yaml"
+
+protect_against_deletion: true  # Prevent accidental deletion
+
+create_load_balancer_for_the_kubernetes_api: true  # HA API access
+
+k3s_upgrade_concurrency: 1  # Upgrade one node at a time for safety
+
+---
+# After cluster creation, apply these additional resources:
+
+# 1. Namespace for Hermes Bridge
+# kubectl create namespace hermes-bridge
+
+# 2. Secret for Bridge authentication
+# kubectl create secret generic bridge-auth \
+#   --namespace hermes-bridge \
+#   --from-literal=secret=$(openssl rand -hex 32)
+
+# 3. Deploy Go Bridge
+# helm install hermes-bridge ./deploy/ \
+#   --namespace hermes-bridge \
+#   --set secretName=bridge-auth
+
+# 4. Configure DNS for hermeshq.net domain
+# Point *.hermeshq.net to Hetzner LoadBalancer IP
+
+# 5. Install cert-manager for TLS
+# kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.15.0/cert-manager.yaml
+
+---
+# Estimated costs:
+# - 3 masters (cpx22): ~€12/month
+# - 3 workers (cpx32): ~€36/month
+# - LoadBalancer: ~€6/month
+# - Total: ~€54/month for HA production cluster
