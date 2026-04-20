@@ -1,0 +1,78 @@
+# Hermes Test Cluster - ONE VM Configuration
+# For use with hetzner-k3s CLI
+#
+# Usage:
+#   export HCLOUD_TOKEN="your-token"
+#   hetzner-k3s create cluster -c cluster-config-test.yaml
+#
+# Cost: ~€4/month for ONE VM (cpx21)
+# NOT for production - single point of failure
+
+hetzner_token: "${HCLOUD_TOKEN}"
+cluster_name: hermes-test
+kubeconfig_path: "./kubeconfig-test"
+k3s_version: v1.32.0+k3s1
+
+networking:
+  ssh:
+    port: 22
+    use_agent: false
+    public_key_path: "~/.ssh/id_ed25519.pub"
+    private_key_path: "~/.ssh/id_ed25519"
+  allowed_networks:
+    ssh:
+      - 0.0.0.0/0
+    api:
+      - 0.0.0.0/0
+  public_network:
+    ipv4: true
+    ipv6: true
+
+datastore:
+  mode: etcd
+
+# CRITICAL: Master runs workloads (no separate workers needed)
+schedule_workloads_on_masters: true
+
+# ONE master only - cheapest setup
+masters_pool:
+  instance_type: cpx21      # 2 vCPU, 4GB RAM - ~€4/month
+  instance_count: 1         # ONE VM for everything
+  locations:
+    - fsn1                  # Falkenstein, Germany
+
+# NO workers - master handles all pods
+worker_node_pools: []
+
+# Essential addons for testing
+addons:
+  csi_driver:
+    enabled: true           # For persistent storage (PVCs)
+    manifest_url: "https://raw.githubusercontent.com/hetznercloud/csi-driver/v2.20.2/deploy/kubernetes/hcloud-csi.yml"
+  
+  cloud_controller_manager:
+    enabled: true           # For Hetzner LoadBalancer services
+    manifest_url: "https://github.com/hetznercloud/hcloud-cloud-controller-manager/releases/download/v1.30.1/ccm-networks.yaml"
+  
+  traefik:
+    enabled: true           # Ingress controller (k3s built-in)
+  
+  servicelb:
+    enabled: true           # LoadBalancer support (k3s built-in)
+  
+  metrics_server:
+    enabled: true           # For kubectl top commands
+
+create_load_balancer_for_the_kubernetes_api: false
+
+protect_against_deletion: true
+
+---
+# QUICK START:
+#
+# 1. Set token:          export HCLOUD_TOKEN="your-token"
+# 2. Create cluster:     hetzner-k3s create cluster -c cluster-config-test.yaml
+# 3. Get kubeconfig:     export KUBECONFIG=./kubeconfig-test
+# 4. Verify:             kubectl get nodes
+# 5. Deploy bridge:      kubectl apply -f deploy/
+# 6. Destroy when done:  hetzner-k3s destroy cluster -c cluster-config-test.yaml
