@@ -172,6 +172,26 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			"repository": repository,
 			"tag":        tag,
 		},
+		// bootstrap.overwrite=true: init container always writes config.yaml from the
+		// Helm-rendered ConfigMap to HERMES_HOME on every pod start. This means:
+		//   - create → fresh config written to PVC ✓
+		//   - helm upgrade (config change) → new ConfigMap → pod restart → new config ✓
+		//   - pod restart (OOMKill, image pull) → config re-applied from ConfigMap ✓
+		//   - bridge image rebuild → only affects bridge pod, workspace PVC untouched ✓
+		"bootstrap": map[string]any{
+			"enabled":   true,
+			"overwrite": true,
+		},
+		// config.values is what the chart's ConfigMap template renders into config.yaml.
+		// The backend sends spec.Config as the partial override; chart defaults fill the rest.
+		"config": map[string]any{
+			"values": spec.Config,
+		},
+		// env is the chart's flat map of platform env vars (GATEWAY_ALLOW_ALL_USERS, etc.)
+		// extraEnv is for arbitrary additional env vars as a list.
+		"env":      spec.EnvMap,
+		"extraEnv": envValues(spec.Env),
+		"secrets":  buildSecrets(spec.Secrets),
 		"resources": map[string]any{
 			"requests": map[string]any{},
 			"limits":   map[string]any{},
@@ -194,21 +214,12 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			"enabled": true,
 			"port":    8642,
 		},
-		"secrets": map[string]any{
-			"API_SERVER_KEY": randomHex(32),
-		},
 		"ingress": map[string]any{
 			"enabled": spec.ingressEnabled(),
 		},
-		"extraEnv":     envValues(spec.Env),
 		"bridge":       map[string]any{"workspace": spec},
-		"config":       spec.Config,
 		"nodeSelector": spec.NodeSelector,
 		"tolerations":  spec.Tolerations,
-	}
-
-	if len(spec.Secrets) > 0 {
-		values["secrets"] = spec.Secrets
 	}
 
 	if policy := strings.TrimSpace(spec.ImagePullPolicy); policy != "" {
@@ -323,6 +334,16 @@ func (b *Bridge) getWorkspaceStatusFromRelease(ctx context.Context, rel *release
 		return WorkspaceStatus{}, err
 	}
 	return status, nil
+}
+
+// buildSecrets converts the spec's string secrets map to the any-typed map Helm values expect.
+// API_SERVER_KEY must always be present — handler ensures it on create; backend must re-send on update.
+func buildSecrets(provided map[string]string) map[string]any {
+	out := map[string]any{}
+	for k, v := range provided {
+		out[k] = v
+	}
+	return out
 }
 
 func randomHex(n int) string {

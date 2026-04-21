@@ -27,11 +27,32 @@ func (b *Bridge) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ensure API_SERVER_KEY is set before the async op so we can return it now.
+	// Backend must store this and pass it back on every future update.
+	if spec.Secrets == nil {
+		spec.Secrets = map[string]string{}
+	}
+	if spec.Secrets["API_SERVER_KEY"] == "" {
+		spec.Secrets["API_SERVER_KEY"] = randomHex(32)
+	}
+	apiKey := spec.Secrets["API_SERVER_KEY"]
+
 	op := b.submitOperation("create", workspaceID, func(ctx context.Context) error {
 		_, err := b.CreateWorkspace(ctx, spec)
 		return err
 	})
-	writeJSON(w, http.StatusAccepted, op)
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"id":           op.ID,
+		"type":         op.Type,
+		"workspaceId":  op.WorkspaceID,
+		"status":       op.Status,
+		"message":      op.Message,
+		"startedAt":    op.StartedAt,
+		"secrets": map[string]string{
+			"API_SERVER_KEY": apiKey,
+		},
+	})
 }
 
 func (b *Bridge) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {

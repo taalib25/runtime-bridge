@@ -14,7 +14,13 @@ type WorkspaceSpec struct {
 	Storage          StorageSpec       `json:"storage,omitempty"`
 	Network          NetworkSpec       `json:"network,omitempty"`
 	Env              []EnvVar          `json:"env,omitempty"`
+	// EnvMap maps to the chart's flat `env:` block — platform settings like
+	// GATEWAY_ALLOW_ALL_USERS, TELEGRAM_ALLOWED_USERS, etc.
+	EnvMap           map[string]string `json:"envMap,omitempty"`
 	Secrets          map[string]string `json:"secrets,omitempty"`
+	// Config maps to chart's config.values — partial Hermes config.yaml override.
+	// Chart merges with defaults. Always re-sent on updates; bridge writes it to
+	// the ConfigMap which the init container copies to HERMES_HOME/config.yaml.
 	Config           map[string]any    `json:"config,omitempty"`
 	HealthCheckPath  string            `json:"healthCheckPath,omitempty"`
 	ServiceAccount   string            `json:"serviceAccount,omitempty"`
