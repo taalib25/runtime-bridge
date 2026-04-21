@@ -26,6 +26,10 @@ type WorkspaceSpec struct {
 	// even if one already exists. Set true only on explicit config updates (PUT).
 	// False on normal pod restarts so agent's runtime config edits are preserved.
 	OverwriteConfig  bool              `json:"overwriteConfig,omitempty"`
+	// CORSOrigins is passed to apiServer.corsOrigins — set to your frontend domain
+	// so the browser can call the agent directly without going through the backend.
+	// e.g. "https://app.hermeshq.net" or "*" for development.
+	CORSOrigins      string            `json:"corsOrigins,omitempty"`
 	HealthCheckPath  string            `json:"healthCheckPath,omitempty"`
 	ServiceAccount   string            `json:"serviceAccount,omitempty"`
 	NodeSelector     map[string]string `json:"nodeSelector,omitempty"`

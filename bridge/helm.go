@@ -215,8 +215,9 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			},
 		},
 		"apiServer": map[string]any{
-			"enabled": true,
-			"port":    8642,
+			"enabled":     true,
+			"port":        8642,
+			"corsOrigins": spec.CORSOrigins,
 		},
 		"ingress": map[string]any{
 			"enabled": spec.ingressEnabled(),
