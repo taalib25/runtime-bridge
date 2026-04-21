@@ -1,6 +1,59 @@
 # Backend API Guide for Hermes Workspaces
 
-The backend should **not** interact with the bridge directly. Instead, use a simple product-level API that abstracts infrastructure details.
+## Connection Architecture
+
+Do **not** proxy agent traffic through the backend — it wastes bandwidth and adds latency. Use credential delegation instead:
+
+```
+1. Frontend authenticates with your backend (JWT / session)
+2. Backend returns workspace URL + API key
+3. Frontend talks to the agent directly
+
+Frontend ──── POST /auth/workspace ────► Backend (your API)
+         ◄─── {url, api_key} ──────────
+Frontend ──── direct ─────────────────► https://tenant-xxx.hermeshq.net
+                                              (uses Hetzner bandwidth)
+```
+
+**What the backend exposes to the frontend:**
+
+```json
+{
+  "workspaceUrl": "https://tenant-a3f9kx2m.hermeshq.net",
+  "apiKey": "<API_SERVER_KEY>",
+  "model": "hermes-agent"
+}
+```
+
+**What the frontend does with it (OpenAI-compatible SDK):**
+
+```javascript
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "https://tenant-a3f9kx2m.hermeshq.net/v1",
+  apiKey: apiKey,
+  dangerouslyAllowBrowser: true,  // direct from browser
+});
+
+const stream = await client.chat.completions.create({
+  model: "hermes-agent",
+  messages: [{ role: "user", content: "hello" }],
+  stream: true,
+});
+```
+
+**What the backend stores per user (in DB):**
+
+| Field | Description |
+|-------|-------------|
+| `workspace_id` | `tenant-a3f9kx2m` — used for bridge lifecycle calls |
+| `api_server_key` | From bridge create response `secrets.API_SERVER_KEY` |
+| `workspace_url` | `https://{workspace_id}.hermeshq.net` |
+| `secrets` | `ANTHROPIC_API_KEY` etc — re-sent on every bridge update |
+| `config` | Agent config — re-sent on every bridge update |
+
+---
 
 ## Workspace ID Convention
 
