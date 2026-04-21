@@ -51,14 +51,22 @@ jobs:
           docker save hermes-bridge:latest | \
             ssh root@178.104.185.60 "k3s ctr images import -"
 
+      - name: Sync chart ConfigMap
+        run: |
+          tar czf - charts/hermes-agent | \
+            ssh root@178.104.185.60 "cd /tmp && tar xzf -"
+          ssh root@178.104.185.60 "
+            KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n hermes-bridge create configmap hermes-agent-chart \
+              --from-file=/tmp/charts/hermes-agent/ \
+              --dry-run=client -o yaml | KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f -
+          "
+
       - name: Apply manifests
         run: |
-          ssh root@178.104.185.60 "
-            KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/rbac.yaml 2>/dev/null || true
-          "
-          # Push updated deployment manifest
+          scp deploy/rbac.yaml root@178.104.185.60:/tmp/rbac.yaml
           scp deploy/deployment-test.yaml root@178.104.185.60:/tmp/deployment-test.yaml
           ssh root@178.104.185.60 "
+            KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/rbac.yaml
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/deployment-test.yaml
           "
 
