@@ -1,206 +1,170 @@
 # Hermes Runtime Operator
 
-Hermes Runtime Operator is a Go operator built with Kubebuilder/controller-runtime that manages Hermes runtime workloads through a `Runtime` custom resource.
+A Go service that manages tenant Hermes workspaces on Kubernetes via Helm. It exposes a simple HTTP API that the backend calls to create, update, and delete isolated runtime environments — each backed by a Helm release of the `hermes-agent` chart.
 
-It provides two layers:
+## Architecture
 
-- **Kubernetes operator core**: CRD, reconciler, status, owned resources, lifecycle
-- **backend compatibility API**: HTTP endpoints that a Hono.js backend can call for runtime and secret lifecycle operations
-
-## What It Manages
-
-For each `Runtime` resource, the controller reconciles:
-
-- `ConfigMap`
-- managed `Secret`
-- `PersistentVolumeClaim`
-- single-replica `Deployment`
-- `Service`
-- `Ingress`
-
-The operator is the source of truth for tenant runtime infrastructure. The backend should not patch Deployments, Services, Ingresses, or pods directly.
-
-## Core Contract
-
-- API group: `hermes.hermeshq.net/v1alpha1`
-- Kind: `Runtime`
-- Reconciler: `RuntimeReconciler`
-- Compatibility API: implemented in `internal/api/server.go`
-
-See `DEPLOYMENT.md` for the exact runtime API contract and local-against-prod run mode.
-
-## Installation Modes
-
-This repo supports three install/distribution layers:
-
-1. **Kustomize installer**
-2. **Helm chart** for installing the operator itself
-3. **Operator SDK bundle + file-based catalog** for OLM-style distribution
-
-Helm is used to install the operator. Helm is **not** the per-tenant runtime lifecycle mechanism.
-
-## Prerequisites
-
-- Go 1.24+
-- Docker
-- kubectl
-- Helm 3
-- Access to a Kubernetes cluster (Kind for local validation is recommended)
-
-## Main Development Commands
-
-### Core operator development
-
-```sh
-make manifests
-make generate
-make test
-make test-e2e
-make build
+```
+Backend
+  │
+  │  POST /v1/workspaces/{id}   (tenantId, plan, config)
+  ▼
+Bridge (this service)
+  │
+  │  helm install/upgrade/uninstall
+  ▼
+hermes-agent Helm release
+  └── Deployment (nousresearch/hermes-agent:latest)
+  └── Service
+  └── Ingress  ({workspace-id}.hermeshq.net)
+  └── PersistentVolumeClaim
+  └── ConfigMap (Hermes config.yaml + SOUL.md)
 ```
 
-### Installer / packaging
+**Cluster:** Single Hetzner VM running k3s, managed via hetzner-k3s CLI.  
+**Ingress:** Traefik (k3s default) with Cloudflare DNS (`*.hermeshq.net → 178.104.185.60`).  
+**Bridge endpoint:** `http://bridge.hermeshq.net`
 
-```sh
-make build-installer IMG=<operator-image>
-make bundle IMG=<operator-image> VERSION=0.1.0 CHANNELS=alpha DEFAULT_CHANNEL=alpha
-make bundle-validate
-make scorecard
-make catalog
-make helm-lint
-make helm-template
-make chart-package
-make verify-packaging
+## API
+
+All workspace endpoints require the `X-Bridge-Secret` header.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/workspaces` | List all workspaces |
+| `POST` | `/v1/workspaces/{id}` | Create workspace (Helm install) |
+| `GET` | `/v1/workspaces/{id}` | Get workspace + status |
+| `PUT` | `/v1/workspaces/{id}` | Update workspace (Helm upgrade) |
+| `DELETE` | `/v1/workspaces/{id}` | Delete workspace (Helm uninstall) |
+| `GET` | `/v1/workspaces/{id}/status` | Detailed status |
+| `GET` | `/v1/workspaces/{id}/health` | Health check |
+| `GET` | `/healthz` | Bridge liveness |
+| `GET` | `/readyz` | Bridge readiness |
+| `GET` | `/metrics` | Prometheus metrics |
+
+### Example: Create workspace
+
+```bash
+curl -X POST http://bridge.hermeshq.net/v1/workspaces/tenant-001 \
+  -H "X-Bridge-Secret: <secret>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tenantId": "tenant-001",
+    "image": "nousresearch/hermes-agent",
+    "imageTag": "latest",
+    "namespace": "tenant-001",
+    "ingressEnabled": true,
+    "createNamespace": true,
+    "resources": { "cpuRequest": "500m", "memoryRequest": "1Gi" },
+    "storage": { "enabled": true, "size": "10Gi" },
+    "network": { "subdomain": "tenant-001", "host": "hermeshq.net" }
+  }'
 ```
 
-## Kustomize Install Path
+See `BACKEND_API_GUIDE.md` for the full backend integration spec including plan tiers and config merging.
 
-Generate a single install artifact:
+## Configuration
 
-```sh
-make build-installer IMG=<registry>/hermes-runtime-operator:<tag>
+Bridge is configured via environment variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `BRIDGE_SECRET` | ✓ | Shared secret for API auth (`X-Bridge-Secret` header) |
+| `BRIDGE_CLUSTER_NAME` | ✓ | Cluster identifier returned in health responses |
+| `BRIDGE_CHART_PATH` | ✓ | Path to the hermes-agent Helm chart (mounted ConfigMap) |
+| `BRIDGE_NAMESPACE` | ✓ | Default namespace for Helm operations |
+| `BRIDGE_SYNC_INTERVAL` | | Workspace health sync interval (default: `5m`) |
+| `BRIDGE_LISTEN_ADDRESS` | | HTTP listen address (default: `:8080`) |
+| `BRIDGE_KUBECONFIG` | | Path to kubeconfig (defaults to in-cluster config) |
+| `BRIDGE_RELEASE_PREFIX` | | Prefix added to all Helm release names |
+| `BRIDGE_CREATE_NAMESPACE` | | Auto-create namespaces on install (default: `false`) |
+
+## Local Development
+
+```bash
+# Build
+go build -o /tmp/bridge ./bridge/
+
+# Run unit tests
+go test ./bridge/... -v
+
+# Run locally against test cluster
+BRIDGE_SECRET=dev-secret \
+BRIDGE_CLUSTER_NAME=local \
+BRIDGE_CHART_PATH=./charts/hermes-agent \
+BRIDGE_NAMESPACE=default \
+KUBECONFIG=./kubeconfig-test \
+/tmp/bridge
 ```
 
-This writes:
+## Deployment
 
-- `dist/install.yaml`
+The bridge runs in the `hermes-bridge` namespace on k3s. Manifests are in `deploy/`:
 
-Install with:
-
-```sh
-kubectl apply -f dist/install.yaml
+```
+deploy/
+  deployment-test.yaml   # Bridge Deployment
+  service.yaml           # ClusterIP Service
+  rbac.yaml              # ServiceAccount + ClusterRole
+  secret.yaml            # bridge-auth Secret template
+  ingress.yaml           # Traefik Ingress (bridge.hermeshq.net)
 ```
 
-## Helm Install Path
+The `hermes-agent` chart is mounted into the bridge pod as a ConfigMap at `/charts/hermes-agent`.
 
-The generated operator chart lives at:
+### Manual deploy
 
-- `charts/chart`
+```bash
+# Build and load image directly into k3s (no registry needed)
+docker build -t hermes-bridge:latest .
+docker save hermes-bridge:latest | ssh root@178.104.185.60 "k3s ctr images import -"
 
-Validate it:
+# Sync chart ConfigMap
+tar czf - charts/hermes-agent | ssh root@178.104.185.60 "cd /tmp && tar xzf -"
+ssh root@178.104.185.60 "kubectl -n hermes-bridge create configmap hermes-agent-chart \
+  --from-file=/tmp/charts/hermes-agent/ --dry-run=client -o yaml | kubectl apply -f -"
 
-```sh
-make helm-lint
-make helm-template
-make chart-package
+# Apply manifests and restart
+kubectl apply -f deploy/ --kubeconfig kubeconfig-test
+kubectl rollout restart deployment/hermes-bridge -n hermes-bridge --kubeconfig kubeconfig-test
 ```
 
-Install the operator with Helm:
+## CI/CD
 
-```sh
-make helm-deploy IMG=<registry>/hermes-runtime-operator:<tag>
+GitHub Actions workflow: `.github/workflows/bridge.yml`
+
+| Phase | Trigger | Steps |
+|-------|---------|-------|
+| **Unit tests** | Every PR + push | `go test ./bridge/...`, `go vet` |
+| **Deploy** | Push to `main` / `go-bridge` | Build image → SSH pipe to k3s → sync chart ConfigMap → apply manifests → rollout → smoke test |
+
+No container registry is used — the image is piped directly from the CI runner into k3s via SSH.
+
+**Required GitHub secret:** `HETZNER_SSH_PRIVATE_KEY` — the private key for `root@178.104.185.60`.
+
+## Bridge code structure
+
+```
+bridge/
+  main.go       Entry point — load config, build bridge, start HTTP server + sync loop
+  bridge.go     HTTP router, auth middleware, Bridge struct, operation tracking
+  handlers.go   HTTP request handlers (create/get/update/delete/status/health)
+  helm.go       Helm client operations (install, upgrade, uninstall, list, buildValues)
+  sync.go       Periodic sync loop — alerts on stuck/unhealthy workspaces
+  status.go     Translates Helm release state → WorkspaceStatus
+  config.go     Config struct, env var loading, validation
+  types.go      WorkspaceSpec, WorkspaceStatus, Operation, ErrorResponse
+  metrics.go    Prometheus metrics (workspace count, operation latency, results)
+  bridge_test.go  Unit tests (21 tests — auth, handlers, config, buildValues, helpers)
 ```
 
-This installs the **operator**, not tenant runtimes.
+## Workspace lifecycle
 
-## OLM / Bundle Path
+1. Backend POSTs `WorkspaceSpec` to `/v1/workspaces/{id}`
+2. Bridge validates spec, spawns async operation
+3. Helm installs `hermes-agent` chart into `{namespace}` with generated values
+4. Pod starts, mounts PVC, bootstraps Hermes config from ConfigMap
+5. Ingress routes `{workspace-id}.hermeshq.net` to the workspace service
+6. Bridge sync loop monitors health every 5 minutes and logs alerts
 
-Generate the bundle:
-
-```sh
-make bundle IMG=<registry>/hermes-runtime-operator:<tag> VERSION=0.1.0 CHANNELS=alpha DEFAULT_CHANNEL=alpha
-```
-
-Validate the bundle:
-
-```sh
-make bundle-validate
-make scorecard
-```
-
-Generate a file-based catalog:
-
-```sh
-make catalog
-```
-
-This produces:
-
-- `bundle/`
-- `bundle.Dockerfile`
-- `catalog/index.yaml`
-
-Optional images:
-
-```sh
-make bundle-build BUNDLE_IMG=<registry>/hermes-runtime-operator-bundle:<tag>
-make catalog-build CATALOG_IMG=<registry>/hermes-runtime-operator-catalog:<tag>
-```
-
-## How Helm and OLM Fit Together
-
-- **Helm**: best for direct installation by users/teams who already use Helm
-- **Bundle/OLM**: best for broader operator distribution, catalog-based installs, and long-term packaging metadata
-- **Runtime lifecycle**: always goes through the operator via `Runtime` CRs / compatibility API
-
-Do not use Helm as the primary per-tenant lifecycle tool once the operator is installed.
-
-## Backend Integration
-
-The backend should talk to the operator API, not to Kubernetes resources directly.
-
-Supported compatibility endpoints include:
-
-- `POST /runtimes`
-- `PUT /runtimes/{id}`
-- `GET /runtimes`
-- `GET /runtimes/{id}`
-- `GET /runtimes/{id}/health`
-- `GET /runtimes/{id}/secrets`
-- `POST /runtimes/{id}/secrets`
-- `DELETE /runtimes/{id}/secrets/{key}`
-- `DELETE /runtimes/{id}`
-
-Examples live in:
-
-- `docs/examples/hono-runtime-client.ts`
-- `docs/examples/hono-routes.ts`
-
-## Local Against Production
-
-You can run the operator locally against a production kubeconfig before deploying the manager in-cluster.
-
-```sh
-go build -o /tmp/runtime-operator ./cmd
-
-CONTROLLER_SHARED_SECRET=local-test-secret \
-RUNTIME_NAMESPACE=hermes-prod \
-/tmp/runtime-operator \
-  --leader-elect=false \
-  --metrics-bind-address=0 \
-  --api-bind-address=127.0.0.1:18080 \
-  --kubeconfig /path/to/prod-kubeconfig
-```
-
-## Recommended Product Model
-
-- Use **Helm** or `dist/install.yaml` to install the operator
-- Use **Runtime CRs** (or the compatibility API) to manage tenant runtimes
-- Use **bundle + catalog** for broader/enterprise/operator-ecosystem distribution
-
-## Key Docs
-
-- `DEPLOYMENT.md` — runtime API and local/prod flow
-- `HERMES_PRODUCT_INTEGRATION_MASTER.md` — product architecture guidance
-- `docs/examples/hono-runtime-client.ts` — exact backend client example
-- `docs/examples/hono-routes.ts` — Hono integration example
+Operations (create/update/delete) are async — bridge returns an operation object immediately. Poll `/v1/workspaces/{id}` to check when `phase: ready`.
