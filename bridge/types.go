@@ -22,6 +22,10 @@ type WorkspaceSpec struct {
 	// Chart merges with defaults. Always re-sent on updates; bridge writes it to
 	// the ConfigMap which the init container copies to HERMES_HOME/config.yaml.
 	Config           map[string]any    `json:"config,omitempty"`
+	// OverwriteConfig forces the init container to overwrite HERMES_HOME/config.yaml
+	// even if one already exists. Set true only on explicit config updates (PUT).
+	// False on normal pod restarts so agent's runtime config edits are preserved.
+	OverwriteConfig  bool              `json:"overwriteConfig,omitempty"`
 	HealthCheckPath  string            `json:"healthCheckPath,omitempty"`
 	ServiceAccount   string            `json:"serviceAccount,omitempty"`
 	NodeSelector     map[string]string `json:"nodeSelector,omitempty"`

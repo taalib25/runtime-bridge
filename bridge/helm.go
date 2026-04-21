@@ -172,15 +172,19 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			"repository": repository,
 			"tag":        tag,
 		},
-		// bootstrap.overwrite=true: init container always writes config.yaml from the
-		// Helm-rendered ConfigMap to HERMES_HOME on every pod start. This means:
-		//   - create → fresh config written to PVC ✓
-		//   - helm upgrade (config change) → new ConfigMap → pod restart → new config ✓
-		//   - pod restart (OOMKill, image pull) → config re-applied from ConfigMap ✓
-		//   - bridge image rebuild → only affects bridge pod, workspace PVC untouched ✓
+		// bootstrap.overwrite controls whether the init container forcefully overwrites
+		// HERMES_HOME/config.yaml on every pod start.
+		//
+		// false (default, pod restarts): preserves agent's runtime config edits and
+		//   SOUL.md on the PVC — seeds only if file doesn't exist yet.
+		// true (explicit config update via PUT): overwrites config.yaml with the new
+		//   Helm-rendered ConfigMap so the backend's config change takes effect.
+		//
+		// Sessions, memories, logs, skills on the PVC are NEVER touched by bootstrap
+		// regardless of this flag — they survive all restarts and image rebuilds.
 		"bootstrap": map[string]any{
 			"enabled":   true,
-			"overwrite": true,
+			"overwrite": spec.OverwriteConfig,
 		},
 		// config.values is what the chart's ConfigMap template renders into config.yaml.
 		// The backend sends spec.Config as the partial override; chart defaults fill the rest.

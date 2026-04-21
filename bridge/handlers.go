@@ -77,6 +77,10 @@ func (b *Bridge) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// PUT always means the backend is intentionally changing config — force overwrite
+	// so the new config.yaml takes effect on next pod start.
+	spec.OverwriteConfig = true
+
 	op := b.submitOperation("update", workspaceID, func(ctx context.Context) error {
 		_, err := b.UpdateWorkspace(ctx, spec)
 		return err
