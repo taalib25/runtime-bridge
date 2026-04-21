@@ -15,6 +15,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o br
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/bridge .
+COPY charts/hermes-agent /charts/hermes-agent
 USER 65532:65532
 
 ENTRYPOINT ["/bridge"]

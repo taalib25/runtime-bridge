@@ -51,15 +51,10 @@ jobs:
           docker save hermes-bridge:latest | \
             ssh root@178.104.185.60 "k3s ctr images import -"
 
-      - name: Sync chart ConfigMap
+      - name: Pre-pull hermes-agent on node
         run: |
-          tar czf - charts/hermes-agent | \
-            ssh root@178.104.185.60 "cd /tmp && tar xzf -"
-          ssh root@178.104.185.60 "
-            KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n hermes-bridge create configmap hermes-agent-chart \
-              --from-file=/tmp/charts/hermes-agent/ \
-              --dry-run=client -o yaml | KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f -
-          "
+          ssh root@178.104.185.60 \
+            "k3s ctr images pull docker.io/nousresearch/hermes-agent:latest"
 
       - name: Apply manifests
         run: |

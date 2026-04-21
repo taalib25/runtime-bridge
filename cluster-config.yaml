@@ -25,6 +25,10 @@ networking:
       - 0.0.0.0/0  # Restrict in production
     api:
       - 0.0.0.0/0  # Restrict to your IPs in production
+    http:
+      - 0.0.0.0/0
+    https:
+      - 0.0.0.0/0
   public_network:
     ipv4: true
     ipv6: true

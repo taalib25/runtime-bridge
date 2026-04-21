@@ -91,8 +91,12 @@ func buildRESTConfig(kubeconfigPath string) (*rest.Config, error) {
 }
 
 func newHelmActionConfig(cfg Config) (*action.Configuration, error) {
+	return newHelmActionConfigForNamespace(cfg, cfg.Namespace)
+}
+
+func newHelmActionConfigForNamespace(cfg Config, namespace string) (*action.Configuration, error) {
 	flags := genericclioptions.NewConfigFlags(true)
-	flags.Namespace = &cfg.Namespace
+	flags.Namespace = &namespace
 	if strings.TrimSpace(cfg.KubeconfigPath) != "" {
 		flags.KubeConfig = &cfg.KubeconfigPath
 	}
@@ -103,12 +107,16 @@ func newHelmActionConfig(cfg Config) (*action.Configuration, error) {
 	}
 
 	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(flags, cfg.Namespace, helmDriver, func(format string, args ...interface{}) {
+	if err := actionConfig.Init(flags, namespace, helmDriver, func(format string, args ...interface{}) {
 		log.Printf("[helm] "+format, args...)
 	}); err != nil {
 		return nil, fmt.Errorf("init helm action config: %w", err)
 	}
 	return actionConfig, nil
+}
+
+func (b *Bridge) helmConfigForNamespace(namespace string) (*action.Configuration, error) {
+	return newHelmActionConfigForNamespace(b.Config, namespace)
 }
 
 func (b *Bridge) Router() http.Handler {

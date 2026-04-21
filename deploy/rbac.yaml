@@ -10,7 +10,7 @@ metadata:
   name: hermes-bridge
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "secrets", "configmaps", "pods", "services", "persistentvolumeclaims"]
+    resources: ["namespaces", "secrets", "configmaps", "pods", "services", "persistentvolumeclaims", "serviceaccounts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments"]

@@ -23,6 +23,7 @@ type WorkspaceSpec struct {
 	Annotations      map[string]string `json:"annotations,omitempty"`
 	Labels           map[string]string `json:"labels,omitempty"`
 	IngressEnabled   *bool             `json:"ingressEnabled,omitempty"`
+	CreateNamespace  bool              `json:"createNamespace,omitempty"`
 	PersistenceClass string            `json:"persistenceClass,omitempty"`
 }
 

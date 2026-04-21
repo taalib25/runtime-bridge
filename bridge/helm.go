@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -32,10 +34,18 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 
 	b.Logger.Printf("[CreateWorkspace] Using release name %s, namespace %s", b.releaseName(spec.WorkspaceID), b.workspaceNamespace(spec))
 
-	install := action.NewInstall(b.HelmConfig)
+	ns := b.workspaceNamespace(spec)
+	helmCfg, err := b.helmConfigForNamespace(ns)
+	if err != nil {
+		b.trackOperation("create", "failure", started)
+		return nil, fmt.Errorf("helm config: %w", err)
+	}
+
+	install := action.NewInstall(helmCfg)
 	install.ReleaseName = b.releaseName(spec.WorkspaceID)
-	install.Namespace = b.workspaceNamespace(spec)
-	install.CreateNamespace = b.Config.CreateNamespace
+	install.Namespace = ns
+	install.CreateNamespace = spec.CreateNamespace || b.Config.CreateNamespace
+	install.SkipCRDs = true
 	install.Wait = false
 
 	rel, err := install.RunWithContext(ctx, chart, values)
@@ -52,9 +62,14 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 
 func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error {
 	started := time.Now()
-	uninstall := action.NewUninstall(b.HelmConfig)
+	helmCfg, err := b.helmConfigForNamespace(workspaceID)
+	if err != nil {
+		b.trackOperation("delete", "failure", started)
+		return fmt.Errorf("helm config: %w", err)
+	}
+	uninstall := action.NewUninstall(helmCfg)
 	uninstall.Wait = false
-	_, err := uninstall.Run(b.releaseName(workspaceID))
+	_, err = uninstall.Run(b.releaseName(workspaceID))
 	if err != nil {
 		if strings.Contains(err.Error(), "release: not found") {
 			b.trackOperation("delete", "success", started)
@@ -81,8 +96,16 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		return nil, err
 	}
 
-	upgrade := action.NewUpgrade(b.HelmConfig)
-	upgrade.Namespace = b.workspaceNamespace(spec)
+	ns := b.workspaceNamespace(spec)
+	helmCfg, err := b.helmConfigForNamespace(ns)
+	if err != nil {
+		b.trackOperation("update", "failure", started)
+		return nil, fmt.Errorf("helm config: %w", err)
+	}
+
+	upgrade := action.NewUpgrade(helmCfg)
+	upgrade.Namespace = ns
+	upgrade.SkipCRDs = true
 	upgrade.Wait = false
 
 	rel, err := upgrade.RunWithContext(ctx, b.releaseName(spec.WorkspaceID), chart, values)
@@ -99,6 +122,7 @@ func (b *Bridge) ListWorkspaces(ctx context.Context) ([]WorkspaceStatus, error) 
 
 	lister := action.NewList(b.HelmConfig)
 	lister.All = true
+	lister.AllNamespaces = true
 	releases, err := lister.Run()
 	if err != nil {
 		b.Logger.Printf("[ListWorkspaces] Helm list failed: %v", err)
@@ -155,6 +179,24 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		"persistence": map[string]any{
 			"enabled": true,
 		},
+		"service": map[string]any{
+			"enabled": true,
+			"ports": []any{
+				map[string]any{
+					"name":       "api-server",
+					"port":       8642,
+					"targetPort": 8642,
+					"protocol":   "TCP",
+				},
+			},
+		},
+		"apiServer": map[string]any{
+			"enabled": true,
+			"port":    8642,
+		},
+		"secrets": map[string]any{
+			"API_SERVER_KEY": randomHex(32),
+		},
 		"ingress": map[string]any{
 			"enabled": spec.ingressEnabled(),
 		},
@@ -210,15 +252,18 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 	}
 
 	ingress := values["ingress"].(map[string]any)
-	if spec.Network.IngressClassName != "" {
-		ingress["className"] = spec.Network.IngressClassName
+	className := spec.Network.IngressClassName
+	if className == "" {
+		className = "traefik"
 	}
+	ingress["className"] = className
 	if host := strings.TrimSpace(spec.Network.host()); host != "" {
 		ingress["hosts"] = []map[string]any{{
 			"host": host,
 			"paths": []map[string]any{{
-				"path":     spec.Network.path(),
-				"pathType": "Prefix",
+				"path":        spec.Network.path(),
+				"pathType":    "Prefix",
+				"servicePort": 8642,
 			}},
 		}}
 	}
@@ -278,6 +323,12 @@ func (b *Bridge) getWorkspaceStatusFromRelease(ctx context.Context, rel *release
 		return WorkspaceStatus{}, err
 	}
 	return status, nil
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func splitImageReference(image string) (string, string) {
