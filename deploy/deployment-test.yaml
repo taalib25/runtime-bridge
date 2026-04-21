@@ -34,9 +34,9 @@ spec:
               value: "hermes-test"
             - name: BRIDGE_NAMESPACE
               value: "default"
-            - name: CHART_PATH
+            - name: BRIDGE_CHART_PATH
               value: /charts/hermes-agent
-            - name: SYNC_INTERVAL
+            - name: BRIDGE_SYNC_INTERVAL
               value: "5m"
           resources:
             requests:
