@@ -5,7 +5,7 @@
 #   export HCLOUD_TOKEN="your-token"
 #   hetzner-k3s create cluster -c cluster-config-test.yaml
 #
-# Cost: ~€4/month for ONE VM (cpx21)
+# Cost: ~€4/month for ONE VM (cpx22)
 # NOT for production - single point of failure
 
 hetzner_token: "${HCLOUD_TOKEN}"
@@ -36,7 +36,7 @@ schedule_workloads_on_masters: true
 
 # ONE master only - cheapest setup
 masters_pool:
-  instance_type: cpx21      # 2 vCPU, 4GB RAM - ~€4/month
+  instance_type: cpx22      # 2 vCPU, 4GB RAM - ~€4/month
   instance_count: 1         # ONE VM for everything
   locations:
     - fsn1                  # Falkenstein, Germany

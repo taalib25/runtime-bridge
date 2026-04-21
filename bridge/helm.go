@@ -14,17 +14,23 @@ import (
 
 func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*release.Release, error) {
 	started := time.Now()
+	b.Logger.Printf("[CreateWorkspace] Starting for workspace %s, tenant %s", spec.WorkspaceID, spec.TenantID)
+
 	chart, err := loader.Load(b.ChartPath)
 	if err != nil {
 		b.trackOperation("create", "failure", started)
+		b.Logger.Printf("[CreateWorkspace] Failed to load chart: %v", err)
 		return nil, fmt.Errorf("load chart: %w", err)
 	}
 
 	values, err := b.buildValues(spec)
 	if err != nil {
 		b.trackOperation("create", "failure", started)
+		b.Logger.Printf("[CreateWorkspace] Failed to build values: %v", err)
 		return nil, err
 	}
+
+	b.Logger.Printf("[CreateWorkspace] Using release name %s, namespace %s", b.releaseName(spec.WorkspaceID), b.workspaceNamespace(spec))
 
 	install := action.NewInstall(b.HelmConfig)
 	install.ReleaseName = b.releaseName(spec.WorkspaceID)
@@ -35,9 +41,12 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 	rel, err := install.RunWithContext(ctx, chart, values)
 	if err != nil {
 		b.trackOperation("create", "failure", started)
+		b.Logger.Printf("[CreateWorkspace] Helm install failed: %v", err)
 		return nil, err
 	}
+
 	b.trackOperation("create", "success", started)
+	b.Logger.Printf("[CreateWorkspace] Created release %s in %s (took %v)", rel.Name, rel.Namespace, time.Since(started))
 	return rel, nil
 }
 
@@ -86,23 +95,29 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 }
 
 func (b *Bridge) ListWorkspaces(ctx context.Context) ([]WorkspaceStatus, error) {
+	b.Logger.Printf("[ListWorkspaces] Starting list operation")
+
 	lister := action.NewList(b.HelmConfig)
 	lister.All = true
 	releases, err := lister.Run()
 	if err != nil {
+		b.Logger.Printf("[ListWorkspaces] Helm list failed: %v", err)
 		return nil, err
 	}
 
+	b.Logger.Printf("[ListWorkspaces] Found %d total releases", len(releases))
+
 	statuses := make([]WorkspaceStatus, 0, len(releases))
 	for _, rel := range releases {
+		b.Logger.Printf("[ListWorkspaces] Processing release %s (namespace: %s)", rel.Name, rel.Namespace)
 		spec, err := workspaceSpecFromRelease(rel.Name, rel.Config, rel.Namespace, b.ClusterName)
 		if err != nil {
-			b.Logger.Printf("Skipping release %s: %v", rel.Name, err)
+			b.Logger.Printf("[ListWorkspaces] Skipping release %s: %v", rel.Name, err)
 			continue
 		}
 		status, err := b.getWorkspaceStatusFromRelease(ctx, rel, spec)
 		if err != nil {
-			b.Logger.Printf("Failed to collect workspace status for %s: %v", spec.WorkspaceID, err)
+			b.Logger.Printf("[ListWorkspaces] Failed to collect workspace status for %s: %v", spec.WorkspaceID, err)
 			continue
 		}
 		statuses = append(statuses, status)
@@ -111,6 +126,7 @@ func (b *Bridge) ListWorkspaces(ctx context.Context) ([]WorkspaceStatus, error) 
 	sort.Slice(statuses, func(i, j int) bool {
 		return statuses[i].WorkspaceID < statuses[j].WorkspaceID
 	})
+	b.Logger.Printf("[ListWorkspaces] Returning %d valid workspaces", len(statuses))
 	b.Metrics.WorkspaceCount.WithLabelValues(b.ClusterName).Set(float64(len(statuses)))
 	return statuses, nil
 }
@@ -143,11 +159,14 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			"enabled": spec.ingressEnabled(),
 		},
 		"extraEnv":     envValues(spec.Env),
-		"secrets":      spec.Secrets,
 		"bridge":       map[string]any{"workspace": spec},
 		"config":       spec.Config,
 		"nodeSelector": spec.NodeSelector,
 		"tolerations":  spec.Tolerations,
+	}
+
+	if len(spec.Secrets) > 0 {
+		values["secrets"] = spec.Secrets
 	}
 
 	if policy := strings.TrimSpace(spec.ImagePullPolicy); policy != "" {

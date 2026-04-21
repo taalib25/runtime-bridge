@@ -97,11 +97,16 @@ func newHelmActionConfig(cfg Config) (*action.Configuration, error) {
 		flags.KubeConfig = &cfg.KubeconfigPath
 	}
 
+	helmDriver := os.Getenv("HELM_DRIVER")
+	if helmDriver == "" {
+		helmDriver = "secret"
+	}
+
 	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(flags, cfg.Namespace, os.Getenv("HELM_DRIVER"), func(format string, args ...interface{}) {
-		log.Printf(format, args...)
+	if err := actionConfig.Init(flags, cfg.Namespace, helmDriver, func(format string, args ...interface{}) {
+		log.Printf("[helm] "+format, args...)
 	}); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("init helm action config: %w", err)
 	}
 	return actionConfig, nil
 }
