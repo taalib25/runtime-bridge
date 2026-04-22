@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -33,6 +35,7 @@ type Bridge struct {
 	Config         Config
 	HelmConfig     *action.Configuration
 	KubeClient     *kubernetes.Clientset
+	DynamicClient  dynamic.Interface
 	ClusterName    string
 	KubeconfigPath string
 	ChartPath      string
@@ -56,6 +59,11 @@ func NewBridge(cfg Config) (*Bridge, error) {
 		return nil, fmt.Errorf("create kubernetes client: %w", err)
 	}
 
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create dynamic client: %w", err)
+	}
+
 	actionConfig, err := newHelmActionConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("initialize helm action config: %w", err)
@@ -65,6 +73,7 @@ func NewBridge(cfg Config) (*Bridge, error) {
 		Config:         cfg,
 		HelmConfig:     actionConfig,
 		KubeClient:     kubeClient,
+		DynamicClient:  dynamicClient,
 		ClusterName:    cfg.ClusterName,
 		KubeconfigPath: cfg.KubeconfigPath,
 		ChartPath:      cfg.ChartPath,
@@ -135,7 +144,35 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/workspaces/{id}/status", b.handleGetStatus).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{id}/health", b.handleHealth).Methods(http.MethodGet)
 
-	return r
+	return b.metricsMiddleware(r)
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (b *Bridge) metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rw, r)
+
+		path := r.URL.Path
+		if route := mux.CurrentRoute(r); route != nil {
+			if tmpl, err := route.GetPathTemplate(); err == nil {
+				path = tmpl
+			}
+		}
+		code := strconv.Itoa(rw.statusCode)
+		b.Metrics.HTTPRequests.WithLabelValues(r.Method, path, code).Inc()
+		b.Metrics.HTTPDuration.WithLabelValues(r.Method, path).Observe(time.Since(start).Seconds())
+	})
 }
 
 func (b *Bridge) authMiddleware(next http.Handler) http.Handler {

@@ -23,8 +23,12 @@ type Config struct {
 	OperationTimeout  time.Duration `json:"operationTimeout" yaml:"operationTimeout"`
 	HealthPath        string        `json:"healthPath" yaml:"healthPath"`
 	ReleasePrefix     string        `json:"releasePrefix" yaml:"releasePrefix"`
-	CreateNamespace   bool          `json:"createNamespace" yaml:"createNamespace"`
-	ConfigFile        string        `json:"-" yaml:"-"`
+	CreateNamespace      bool          `json:"createNamespace" yaml:"createNamespace"`
+	// DefaultForwardAuthURL is applied to every workspace that doesn't set forwardAuthURL explicitly.
+	// Set to your backend's /auth/verify endpoint. Leave empty to disable ForwardAuth globally.
+	// Env: BRIDGE_FORWARD_AUTH_URL
+	DefaultForwardAuthURL string       `json:"defaultForwardAuthURL" yaml:"defaultForwardAuthURL"`
+	ConfigFile            string       `json:"-" yaml:"-"`
 }
 
 func DefaultConfig() Config {
@@ -63,6 +67,7 @@ func LoadConfig() (Config, error) {
 	overlayString(&cfg.BridgeSecret, "BRIDGE_SECRET")
 	overlayString(&cfg.HealthPath, "BRIDGE_HEALTH_PATH")
 	overlayString(&cfg.ReleasePrefix, "BRIDGE_RELEASE_PREFIX")
+	overlayString(&cfg.DefaultForwardAuthURL, "BRIDGE_FORWARD_AUTH_URL")
 
 	if err := overlayDuration(&cfg.SyncInterval, "BRIDGE_SYNC_INTERVAL"); err != nil {
 		return Config{}, err

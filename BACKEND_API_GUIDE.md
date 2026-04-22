@@ -2,7 +2,9 @@
 
 ## Connection Architecture
 
-Do **not** proxy agent traffic through the backend — it wastes bandwidth and adds latency. Use credential delegation instead:
+Do **not** proxy agent traffic through the backend — it wastes bandwidth and adds latency. Two options depending on your security requirements:
+
+### Option A — Credential Delegation (simpler, `API_SERVER_KEY` visible in DevTools)
 
 ```
 1. Frontend authenticates with your backend (JWT / session)
@@ -15,31 +17,75 @@ Frontend ──── direct ─────────────────
                                               (uses Hetzner bandwidth)
 ```
 
-**What the backend exposes to the frontend:**
+Frontend uses the key directly — visible in Chrome DevTools Network tab.
 
+### Option B — Traefik ForwardAuth (recommended for production, key never reaches browser)
+
+```
+Frontend never sees API_SERVER_KEY. It only holds a short-lived JWT from your backend.
+
+Frontend ──── GET /v1/chat/completions ──────────► Traefik (tenant-xxx.hermeshq.net)
+              Authorization: Bearer <JWT>             │
+                                                      ▼
+                                             POST your-backend.com/auth/verify
+                                             (original headers forwarded)
+                                                      │
+                                             200 OK + Authorization: Bearer <API_SERVER_KEY>
+                                                      │
+                                                      ▼
+                                             Agent receives Authorization: Bearer <API_SERVER_KEY>
+                                             (JWT replaced server-side, key never sent to browser)
+```
+
+**To enable:** pass `forwardAuthURL` when creating the workspace:
 ```json
 {
-  "workspaceUrl": "https://tenant-a3f9kx2m.hermeshq.net",
-  "apiKey": "<API_SERVER_KEY>",
-  "model": "hermes-agent"
+  "workspaceId": "tenant-a3f9kx2m",
+  "tenantId": "tenant-a3f9kx2m",
+  "image": "nousresearch/hermes-agent",
+  "forwardAuthURL": "https://api.yourapp.com/auth/verify",
+  ...
 }
 ```
 
-**What the frontend does with it (OpenAI-compatible SDK):**
+The bridge automatically:
+1. Creates a `Traefik Middleware` CR in the workspace namespace
+2. Wires the ingress to call your `/auth/verify` before forwarding any request
 
+**Your backend's `/auth/verify` endpoint receives:**
+- All original request headers, including `Authorization: Bearer <JWT>`
+- `X-Forwarded-Host: tenant-a3f9kx2m.hermeshq.net` (tells you which workspace)
+
+**It must respond:**
+- `200 OK` + header `Authorization: Bearer <API_SERVER_KEY>` → request proceeds
+- `401` or `403` → request is rejected, agent never called
+
+```python
+@app.post("/auth/verify")
+def verify(request: Request):
+    # 1. Parse workspace ID from host header
+    host = request.headers.get("X-Forwarded-Host", "")
+    workspace_id = host.split(".")[0]  # "tenant-a3f9kx2m"
+
+    # 2. Validate the user's JWT
+    jwt_token = request.headers.get("Authorization", "").removeprefix("Bearer ")
+    user = validate_jwt(jwt_token)  # raises if invalid
+
+    # 3. Check the user owns this workspace
+    workspace = db.get_workspace(user.id, workspace_id)
+    if not workspace:
+        raise HTTPException(status_code=403)
+
+    # 4. Return the real API key — Traefik injects it before forwarding to agent
+    return Response(headers={"Authorization": f"Bearer {workspace.api_server_key}"})
+```
+
+**Frontend just uses a normal JWT — no API key needed:**
 ```javascript
-import OpenAI from "openai";
-
 const client = new OpenAI({
   baseURL: "https://tenant-a3f9kx2m.hermeshq.net/v1",
-  apiKey: apiKey,
-  dangerouslyAllowBrowser: true,  // direct from browser
-});
-
-const stream = await client.chat.completions.create({
-  model: "hermes-agent",
-  messages: [{ role: "user", content: "hello" }],
-  stream: true,
+  apiKey: userJWT,  // short-lived, user's own JWT — not the workspace key
+  dangerouslyAllowBrowser: true,
 });
 ```
 
@@ -48,7 +94,7 @@ const stream = await client.chat.completions.create({
 | Field | Description |
 |-------|-------------|
 | `workspace_id` | `tenant-a3f9kx2m` — used for bridge lifecycle calls |
-| `api_server_key` | From bridge create response `secrets.API_SERVER_KEY` |
+| `api_server_key` | From bridge create response `secrets.API_SERVER_KEY` — **never sent to frontend** |
 | `workspace_url` | `https://{workspace_id}.hermeshq.net` |
 | `secrets` | `ANTHROPIC_API_KEY` etc — re-sent on every bridge update |
 | `config` | Agent config — re-sent on every bridge update |
@@ -113,6 +159,7 @@ Store it in your database tied to the tenant when you create the workspace.
 **Optional fields:**
 - `config` (object): Hermes config.yaml overrides (merged with defaults)
 - `storageGb` (number): Override default storage size (default: 10 GB)
+- `forwardAuthURL` (string): Your backend's JWT auth endpoint — enables ForwardAuth so `API_SERVER_KEY` never reaches the browser (see Connection Architecture above)
 
 **Response:**
 ```json
@@ -163,6 +210,28 @@ Store it in your database tied to the tenant when you create the workspace.
 ```
 
 **Note:** Updates trigger Helm upgrade (zero-downtime if possible).
+
+> ℹ️ **Config ownership — safe to call PUT for resources/secrets**
+>
+> `PUT` is safe for plan upgrades, resource changes, and secret updates — the user's
+> `config.yaml` on the PVC is **only overwritten if you include a `config` block** in
+> the request body. Omit `config` and it is never touched.
+>
+> | What you send in PUT | User's config.yaml | When to use |
+> |----------------------|-------------------|-------------|
+> | `plan`, `secrets` only (no `config`) | ✓ Preserved | Plan upgrades, adding API keys |
+> | `plan` + `config` block | ⚠️ Overwritten on next pod start | Deliberate platform config reset |
+>
+> Users can freely edit their own `config.yaml` via the hermes-agent terminal — API keys,
+> model preferences, SOUL.md, etc. Only include a `config` block in `PUT` when you
+> intentionally want to override those settings (e.g. compliance reset, broken config recovery).
+>
+> **Two-layer config ownership:**
+>
+> | Layer | Managed by | Where it lives |
+> |-------|-----------|----------------|
+> | Platform secrets (`API_SERVER_KEY`, platform API keys) | Backend via bridge `secrets` field | Kubernetes Secret — survives everything |
+> | User config (model, own API keys, SOUL.md) | User via terminal | PVC `HERMES_HOME/config.yaml` — preserved unless `config` block sent in PUT |
 
 ---
 
@@ -230,6 +299,7 @@ curl -X POST https://bridge.hermeshq.net/v1/workspaces/tenant-a3f9kx2m \
     },
     "ingressEnabled": true,
     "createNamespace": true,
+    "forwardAuthURL": "https://api.yourapp.com/auth/verify",
     "config": {
       "model": {
         "default": "anthropic/claude-opus-4.6"
@@ -246,6 +316,16 @@ curl -X POST https://bridge.hermeshq.net/v1/workspaces/tenant-a3f9kx2m \
 - ✓ Health checks always active
 - ✓ CPU/Memory mapped from `plan` tier
 - ✓ Config merged with Hermes defaults
+
+> ℹ️ **What belongs in `secrets` vs `config` on create:**
+>
+> - **`secrets`** — platform-managed credentials injected as env vars (`API_SERVER_KEY`,
+>   your platform's `ANTHROPIC_API_KEY` if you're covering the cost, etc.). These are
+>   invisible to the user and survive config overwrites.
+> - **`config`** — initial defaults only (model, max_turns, etc.). Think of this as the
+>   factory defaults. Once the workspace is live, the user owns `config.yaml` and can
+>   change anything through the terminal. Do not inject user-specific API keys here —
+>   users should add those themselves via the terminal.
 
 ---
 
@@ -327,8 +407,8 @@ curl http://bridge.hermeshq.net/v1/workspaces/{tenantId}/status \
 ```
 
 Poll every 2-5 seconds until:
-- `status: ready` + `healthy: true` → Done, return URL to frontend
-- `status: failed` → Error, show user message
+- `status.phase: "ready"` + `status.healthy: true` → Done, return URL to frontend
+- `status.phase: "failed"` → Error, show user message
 - Timeout after 10 minutes → Log alert, show user "still creating"
 
 ---

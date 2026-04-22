@@ -59,10 +59,33 @@ jobs:
       - name: Apply manifests
         run: |
           scp deploy/rbac.yaml root@178.104.185.60:/tmp/rbac.yaml
+          scp deploy/service.yaml root@178.104.185.60:/tmp/service.yaml
           scp deploy/deployment-test.yaml root@178.104.185.60:/tmp/deployment-test.yaml
           ssh root@178.104.185.60 "
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/rbac.yaml
+            KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/service.yaml
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/deployment-test.yaml
+          "
+
+      - name: Apply monitoring stack
+        run: |
+          scp deploy/monitoring/*.yaml root@178.104.185.60:/tmp/
+          ssh root@178.104.185.60 "
+            KC='KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl'
+            \$KC apply -f /tmp/namespace.yaml
+            \$KC apply -f /tmp/prometheus-rbac.yaml
+            \$KC apply -f /tmp/prometheus-pvc.yaml
+            \$KC apply -f /tmp/prometheus-config.yaml
+            \$KC apply -f /tmp/prometheus-deployment.yaml
+            \$KC apply -f /tmp/prometheus-service.yaml
+            \$KC apply -f /tmp/grafana-secret.yaml
+            \$KC apply -f /tmp/grafana-datasource.yaml
+            \$KC apply -f /tmp/grafana-dashboard-provisioner.yaml
+            \$KC apply -f /tmp/grafana-dashboard-hermes.yaml
+            \$KC apply -f /tmp/grafana-pvc.yaml
+            \$KC apply -f /tmp/grafana-deployment.yaml
+            \$KC apply -f /tmp/grafana-service.yaml
+            \$KC apply -f /tmp/grafana-ingress.yaml
           "
 
       - name: Restart & wait for rollout

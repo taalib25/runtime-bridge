@@ -14,6 +14,10 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: hermes-bridge
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: hermes-bridge
       containers:
@@ -38,6 +42,8 @@ spec:
               value: /charts/hermes-agent
             - name: BRIDGE_SYNC_INTERVAL
               value: "5m"
+            - name: BRIDGE_FORWARD_AUTH_URL
+              value: "https://api.hermeshq.net/auth/verify"
           resources:
             requests:
               cpu: 100m

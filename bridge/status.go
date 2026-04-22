@@ -98,7 +98,7 @@ func derivePhase(status WorkspaceStatus, healthErr error) string {
 		return "failed"
 	}
 	if status.ReadyReplicas > 0 && status.Healthy && healthErr == nil {
-		return "running"
+		return "ready"
 	}
 	if status.Replicas == 0 && status.ReadyReplicas == 0 {
 		return "creating"

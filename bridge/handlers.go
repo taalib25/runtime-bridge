@@ -77,9 +77,9 @@ func (b *Bridge) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// PUT always means the backend is intentionally changing config — force overwrite
-	// so the new config.yaml takes effect on next pod start.
-	spec.OverwriteConfig = true
+	// Only overwrite the user's config.yaml if the caller explicitly sent a config block.
+	// A PUT for resources/plan only (no config field) must NOT wipe user's runtime edits.
+	spec.OverwriteConfig = len(spec.Config) > 0
 
 	op := b.submitOperation("update", workspaceID, func(ctx context.Context) error {
 		_, err := b.UpdateWorkspace(ctx, spec)

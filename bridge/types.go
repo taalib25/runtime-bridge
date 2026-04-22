@@ -30,6 +30,13 @@ type WorkspaceSpec struct {
 	// so the browser can call the agent directly without going through the backend.
 	// e.g. "https://app.hermeshq.net" or "*" for development.
 	CORSOrigins      string            `json:"corsOrigins,omitempty"`
+	// ForwardAuthURL enables Traefik ForwardAuth on this workspace's ingress.
+	// Set to your backend's auth endpoint, e.g. "https://api.yourapp.com/auth/verify".
+	// Traefik will call this URL for every request; your endpoint validates the JWT,
+	// then returns 200 + "Authorization: Bearer <API_SERVER_KEY>" header.
+	// Traefik replaces the user's JWT with the real key before forwarding to the agent.
+	// The API_SERVER_KEY is never sent to the browser.
+	ForwardAuthURL   string            `json:"forwardAuthURL,omitempty"`
 	HealthCheckPath  string            `json:"healthCheckPath,omitempty"`
 	ServiceAccount   string            `json:"serviceAccount,omitempty"`
 	NodeSelector     map[string]string `json:"nodeSelector,omitempty"`

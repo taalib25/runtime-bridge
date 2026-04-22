@@ -48,6 +48,12 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 	install.SkipCRDs = true
 	install.Wait = false
 
+	if authURL := strings.TrimSpace(spec.ForwardAuthURL); authURL != "" {
+		if err := b.EnsureForwardAuthMiddleware(ctx, ns, authURL); err != nil {
+			b.Logger.Printf("[CreateWorkspace] Warning: failed to create ForwardAuth middleware: %v", err)
+		}
+	}
+
 	rel, err := install.RunWithContext(ctx, chart, values)
 	if err != nil {
 		b.trackOperation("create", "failure", started)
@@ -78,6 +84,11 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 		b.trackOperation("delete", "failure", started)
 		return err
 	}
+	// Best-effort: remove the ForwardAuth middleware if it exists.
+	if mwErr := b.DeleteForwardAuthMiddleware(ctx, workspaceID); mwErr != nil {
+		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete ForwardAuth middleware: %v", mwErr)
+	}
+	b.Metrics.WorkspaceHealth.DeleteLabelValues(b.ClusterName, workspaceID)
 	b.trackOperation("delete", "success", started)
 	return nil
 }
@@ -107,6 +118,12 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 	upgrade.Namespace = ns
 	upgrade.SkipCRDs = true
 	upgrade.Wait = false
+
+	if authURL := strings.TrimSpace(spec.ForwardAuthURL); authURL != "" {
+		if err := b.EnsureForwardAuthMiddleware(ctx, ns, authURL); err != nil {
+			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update ForwardAuth middleware: %v", err)
+		}
+	}
 
 	rel, err := upgrade.RunWithContext(ctx, b.releaseName(spec.WorkspaceID), chart, values)
 	if err != nil {
@@ -283,6 +300,15 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			}},
 		}}
 	}
+	if strings.TrimSpace(spec.ForwardAuthURL) != "" {
+		ns := spec.Namespace
+		if ns == "" {
+			ns = spec.WorkspaceID
+		}
+		ingress["annotations"] = map[string]any{
+			"traefik.ingress.kubernetes.io/router.middlewares": forwardAuthAnnotation(ns),
+		}
+	}
 
 	return values, nil
 }
@@ -444,6 +470,10 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	}
 	if spec.Config == nil {
 		spec.Config = map[string]any{}
+	}
+	// Fall back to the bridge-level default if the caller didn't specify a ForwardAuth URL.
+	if strings.TrimSpace(spec.ForwardAuthURL) == "" && strings.TrimSpace(b.Config.DefaultForwardAuthURL) != "" {
+		spec.ForwardAuthURL = b.Config.DefaultForwardAuthURL
 	}
 	return spec
 }
