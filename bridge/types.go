@@ -47,6 +47,9 @@ type WorkspaceSpec struct {
 	IngressEnabled   *bool  `json:"ingressEnabled,omitempty"`
 	CreateNamespace  bool   `json:"createNamespace,omitempty"`
 	PersistenceClass string `json:"persistenceClass,omitempty"`
+	// Plan is the pricing tier: "free", "pro", "enterprise".
+	// Surfaces as pod label hermes.ai/plan for metrics and cost attribution.
+	Plan string `json:"plan,omitempty"`
 }
 
 // ─── Hermes config.yaml ──────────────────────────────────────────────────────

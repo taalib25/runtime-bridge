@@ -311,6 +311,10 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		"tolerations":  spec.Tolerations,
 	}
 
+	if spec.Plan != "" {
+		values["podLabels"] = map[string]any{"hermes.ai/plan": spec.Plan}
+	}
+
 	if policy := strings.TrimSpace(spec.ImagePullPolicy); policy != "" {
 		values["image"].(map[string]any)["pullPolicy"] = policy
 	}
