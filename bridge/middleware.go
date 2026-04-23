@@ -116,11 +116,14 @@ func (b *Bridge) EnsureCORSMiddleware(ctx context.Context, namespace string, ori
 		return err
 	}
 
-	originList := make([]any, len(origins))
-	for i, o := range origins {
-		originList[i] = o
+	// Use customResponseHeaders instead of accessControl* fields so the headers are
+	// force-written by Traefik regardless of what the backend pod sends. The accessControl*
+	// fields can be overridden or merged when duplicate Middleware CRDs exist across both
+	// Traefik API groups (traefik.io and traefik.containo.us), causing stale CORS headers.
+	allowOrigin := ""
+	if len(origins) > 0 {
+		allowOrigin = origins[0]
 	}
-
 	obj := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": gvr.Group + "/" + gvr.Version,
@@ -131,31 +134,14 @@ func (b *Bridge) EnsureCORSMiddleware(ctx context.Context, namespace string, ori
 			},
 			"spec": map[string]any{
 				"headers": map[string]any{
-					"accessControlAllowMethods": []any{
-						"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS",
+					"customResponseHeaders": map[string]any{
+						"Access-Control-Allow-Origin":      allowOrigin,
+						"Access-Control-Allow-Credentials": "true",
+						"Access-Control-Allow-Methods":     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
+						"Access-Control-Allow-Headers":     "Authorization,Content-Type,Accept,Accept-Encoding,User-Agent,X-Requested-With,X-Stainless-Lang,X-Stainless-Package-Version,X-Stainless-OS,X-Stainless-Arch,X-Stainless-Runtime,X-Stainless-Runtime-Version,X-Stainless-Retry-Count,X-Stainless-Timeout,OpenAI-Organization,OpenAI-Project",
+						"Access-Control-Max-Age":           "86400",
+						"Vary":                             "Origin",
 					},
-					"accessControlAllowHeaders": []any{
-						"Authorization",
-						"Content-Type",
-						"Accept",
-						"Accept-Encoding",
-						"User-Agent",
-						"X-Requested-With",
-						"X-Stainless-Lang",
-						"X-Stainless-Package-Version",
-						"X-Stainless-OS",
-						"X-Stainless-Arch",
-						"X-Stainless-Runtime",
-						"X-Stainless-Runtime-Version",
-						"X-Stainless-Retry-Count",
-						"X-Stainless-Timeout",
-						"OpenAI-Organization",
-						"OpenAI-Project",
-					},
-					"accessControlAllowOriginList":  originList,
-					"accessControlAllowCredentials": true,
-					"accessControlMaxAge":           int64(86400),
-					"addVaryHeader":                 true,
 				},
 			},
 		},

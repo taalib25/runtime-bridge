@@ -12,6 +12,7 @@ import (
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/release"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*release.Release, error) {
@@ -48,13 +49,16 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 	install.SkipCRDs = true
 	install.Wait = false
 
-	if authURL := strings.TrimSpace(spec.ForwardAuthURL); authURL != "" {
-		if err := b.EnsureForwardAuthMiddleware(ctx, ns, authURL); err != nil {
+	hasCORS := len(parseCORSOrigins(spec.CORSOrigins)) > 0
+	hasAuth := strings.TrimSpace(spec.ForwardAuthURL) != ""
+
+	if hasAuth {
+		if err := b.EnsureForwardAuthMiddleware(ctx, ns, strings.TrimSpace(spec.ForwardAuthURL)); err != nil {
 			b.Logger.Printf("[CreateWorkspace] Warning: failed to create ForwardAuth middleware: %v", err)
 		}
 	}
-	if origins := parseCORSOrigins(spec.CORSOrigins); len(origins) > 0 {
-		if err := b.EnsureCORSMiddleware(ctx, ns, origins); err != nil {
+	if hasCORS {
+		if err := b.EnsureCORSMiddleware(ctx, ns, parseCORSOrigins(spec.CORSOrigins)); err != nil {
 			b.Logger.Printf("[CreateWorkspace] Warning: failed to create CORS middleware: %v", err)
 		}
 	}
@@ -66,9 +70,31 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		return nil, err
 	}
 
+	if hasCORS || hasAuth {
+		host := spec.Network.host()
+		if err := b.EnsureIngressRoute(ctx, ns, host, ns, 8642, hasCORS, hasAuth); err != nil {
+			b.Logger.Printf("[CreateWorkspace] Warning: failed to create IngressRoute: %v", err)
+		} else {
+			// Remove the Helm-managed Ingress so only IngressRoute routes this host.
+			b.deleteHelmIngress(ctx, ns)
+		}
+	}
+
 	b.trackOperation("create", "success", started)
 	b.Logger.Printf("[CreateWorkspace] Created release %s in %s (took %v)", rel.Name, rel.Namespace, time.Since(started))
 	return rel, nil
+}
+
+// deleteHelmIngress removes the Kubernetes Ingress created by the Helm chart so the
+// IngressRoute takes exclusive control of routing for this workspace.
+func (b *Bridge) deleteHelmIngress(ctx context.Context, namespace string) {
+	_, err := b.KubeClient.NetworkingV1().Ingresses(namespace).Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	if err := b.KubeClient.NetworkingV1().Ingresses(namespace).Delete(ctx, namespace, metav1.DeleteOptions{}); err != nil {
+		b.Logger.Printf("[deleteHelmIngress] Warning: failed to delete Ingress %s: %v", namespace, err)
+	}
 }
 
 func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error {
@@ -89,7 +115,10 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 		b.trackOperation("delete", "failure", started)
 		return err
 	}
-	// Best-effort: remove the ForwardAuth middleware if it exists.
+	// Best-effort: remove Traefik resources if they exist.
+	if mwErr := b.DeleteIngressRoute(ctx, workspaceID); mwErr != nil {
+		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete IngressRoute: %v", mwErr)
+	}
 	if mwErr := b.DeleteForwardAuthMiddleware(ctx, workspaceID); mwErr != nil {
 		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete ForwardAuth middleware: %v", mwErr)
 	}
@@ -127,13 +156,16 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 	upgrade.SkipCRDs = true
 	upgrade.Wait = false
 
-	if authURL := strings.TrimSpace(spec.ForwardAuthURL); authURL != "" {
-		if err := b.EnsureForwardAuthMiddleware(ctx, ns, authURL); err != nil {
+	hasCORS := len(parseCORSOrigins(spec.CORSOrigins)) > 0
+	hasAuth := strings.TrimSpace(spec.ForwardAuthURL) != ""
+
+	if hasAuth {
+		if err := b.EnsureForwardAuthMiddleware(ctx, ns, strings.TrimSpace(spec.ForwardAuthURL)); err != nil {
 			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update ForwardAuth middleware: %v", err)
 		}
 	}
-	if origins := parseCORSOrigins(spec.CORSOrigins); len(origins) > 0 {
-		if err := b.EnsureCORSMiddleware(ctx, ns, origins); err != nil {
+	if hasCORS {
+		if err := b.EnsureCORSMiddleware(ctx, ns, parseCORSOrigins(spec.CORSOrigins)); err != nil {
 			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update CORS middleware: %v", err)
 		}
 	}
@@ -143,6 +175,16 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		b.trackOperation("update", "failure", started)
 		return nil, err
 	}
+
+	if hasCORS || hasAuth {
+		host := spec.Network.host()
+		if err := b.EnsureIngressRoute(ctx, ns, host, ns, 8642, hasCORS, hasAuth); err != nil {
+			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update IngressRoute: %v", err)
+		} else {
+			b.deleteHelmIngress(ctx, ns)
+		}
+	}
+
 	b.trackOperation("update", "success", started)
 	return rel, nil
 }

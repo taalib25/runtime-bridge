@@ -22,7 +22,7 @@ rules:
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["traefik.io", "traefik.containo.us"]
-    resources: ["middlewares"]
+    resources: ["middlewares", "ingressroutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
