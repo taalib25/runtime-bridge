@@ -264,6 +264,37 @@ ingress:
   tls: []
   servicePortNumber: null
 
+ingressRoute:
+  enabled: false
+  traefikApiVersion: "traefik.io/v1alpha1"
+  entryPoints:
+    - websecure
+  tls:
+    certResolver: letsencrypt
+  cors:
+    enabled: false
+    origins: []
+    allowHeaders:
+      - Authorization
+      - Content-Type
+      - Accept
+      - Accept-Encoding
+      - User-Agent
+      - X-Requested-With
+      - X-Stainless-Lang
+      - X-Stainless-Package-Version
+      - X-Stainless-OS
+      - X-Stainless-Arch
+      - X-Stainless-Runtime
+      - X-Stainless-Runtime-Version
+      - X-Stainless-Retry-Count
+      - X-Stainless-Timeout
+      - OpenAI-Organization
+      - OpenAI-Project
+  forwardAuth:
+    enabled: false
+    url: ""
+
 virtualService:
   enabled: false
   gateways: []

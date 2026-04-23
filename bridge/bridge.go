@@ -21,6 +21,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/release"
+	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/dynamic"
@@ -313,6 +315,15 @@ func (b *Bridge) lookupRelease(ctx context.Context, workspaceID string) (*releas
 		}
 	}
 	return nil, errWorkspaceNotFound(workspaceID)
+}
+
+func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	_, err := b.KubeClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if k8serrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return err
 }
 
 func errWorkspaceNotFound(workspaceID string) error {

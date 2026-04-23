@@ -42,10 +42,18 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		return nil, fmt.Errorf("helm config: %w", err)
 	}
 
+	createNS := spec.CreateNamespace || b.Config.CreateNamespace
+	if createNS {
+		if err := b.ensureNamespace(ctx, ns); err != nil {
+			b.trackOperation("create", "failure", started)
+			return nil, fmt.Errorf("ensure namespace: %w", err)
+		}
+	}
+
 	install := action.NewInstall(helmCfg)
 	install.ReleaseName = b.releaseName(spec.WorkspaceID)
 	install.Namespace = ns
-	install.CreateNamespace = spec.CreateNamespace || b.Config.CreateNamespace
+	install.CreateNamespace = createNS
 	install.SkipCRDs = true
 	install.Wait = false
 
