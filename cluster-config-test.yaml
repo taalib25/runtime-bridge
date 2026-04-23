@@ -47,21 +47,21 @@ worker_node_pools: []
 # Essential addons for testing
 addons:
   csi_driver:
-    enabled: true           # For persistent storage (PVCs)
+    enabled: true
     manifest_url: "https://raw.githubusercontent.com/hetznercloud/csi-driver/v2.20.2/deploy/kubernetes/hcloud-csi.yml"
-  
+
   cloud_controller_manager:
-    enabled: true           # For Hetzner LoadBalancer services
+    enabled: true
     manifest_url: "https://github.com/hetznercloud/hcloud-cloud-controller-manager/releases/download/v1.30.1/ccm-networks.yaml"
-  
+
   traefik:
-    enabled: true           # Ingress controller (k3s built-in)
-  
+    enabled: true
+
   servicelb:
-    enabled: true           # LoadBalancer support (k3s built-in)
-  
+    enabled: true
+
   metrics_server:
-    enabled: true           # For kubectl top commands
+    enabled: true
 
 create_load_balancer_for_the_kubernetes_api: false
 

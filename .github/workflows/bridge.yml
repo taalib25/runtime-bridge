@@ -67,26 +67,26 @@ jobs:
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/deployment-test.yaml
           "
 
-      - name: Apply monitoring stack
-        run: |
-          scp deploy/monitoring/*.yaml root@178.104.185.60:/tmp/
-          ssh root@178.104.185.60 bash << 'SSHEOF'
-            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-            kubectl apply -f /tmp/namespace.yaml
-            kubectl apply -f /tmp/prometheus-rbac.yaml
-            kubectl apply -f /tmp/prometheus-pvc.yaml
-            kubectl apply -f /tmp/prometheus-config.yaml
-            kubectl apply -f /tmp/prometheus-deployment.yaml
-            kubectl apply -f /tmp/prometheus-service.yaml
-            kubectl apply -f /tmp/grafana-secret.yaml
-            kubectl apply -f /tmp/grafana-datasource.yaml
-            kubectl apply -f /tmp/grafana-dashboard-provisioner.yaml
-            kubectl apply -f /tmp/grafana-dashboard-hermes.yaml
-            kubectl apply -f /tmp/grafana-pvc.yaml
-            kubectl apply -f /tmp/grafana-deployment.yaml
-            kubectl apply -f /tmp/grafana-service.yaml
-            kubectl apply -f /tmp/grafana-ingress.yaml
-          SSHEOF
+      # - name: Apply monitoring stack (disabled — re-enable when needed)
+      #   run: |
+      #     scp deploy/monitoring/*.yaml root@178.104.185.60:/tmp/
+      #     ssh root@178.104.185.60 bash << 'SSHEOF'
+      #       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      #       kubectl apply -f /tmp/namespace.yaml
+      #       kubectl apply -f /tmp/prometheus-rbac.yaml
+      #       kubectl apply -f /tmp/prometheus-pvc.yaml
+      #       kubectl apply -f /tmp/prometheus-config.yaml
+      #       kubectl apply -f /tmp/prometheus-deployment.yaml
+      #       kubectl apply -f /tmp/prometheus-service.yaml
+      #       kubectl apply -f /tmp/grafana-secret.yaml
+      #       kubectl apply -f /tmp/grafana-datasource.yaml
+      #       kubectl apply -f /tmp/grafana-dashboard-provisioner.yaml
+      #       kubectl apply -f /tmp/grafana-dashboard-hermes.yaml
+      #       kubectl apply -f /tmp/grafana-pvc.yaml
+      #       kubectl apply -f /tmp/grafana-deployment.yaml
+      #       kubectl apply -f /tmp/grafana-service.yaml
+      #       kubectl apply -f /tmp/grafana-ingress.yaml
+      #     SSHEOF
 
       - name: Restart & wait for rollout
         run: |
