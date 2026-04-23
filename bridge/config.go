@@ -23,7 +23,7 @@ type Config struct {
 	OperationTimeout  time.Duration `json:"operationTimeout" yaml:"operationTimeout"`
 	HealthPath        string        `json:"healthPath" yaml:"healthPath"`
 	ReleasePrefix     string        `json:"releasePrefix" yaml:"releasePrefix"`
-	CreateNamespace      bool          `json:"createNamespace" yaml:"createNamespace"`
+	CreateNamespace   bool          `json:"createNamespace" yaml:"createNamespace"`
 	// DefaultForwardAuthURL is applied to every workspace that doesn't set forwardAuthURL explicitly.
 	// Set to your backend's /auth/verify endpoint. Leave empty to disable ForwardAuth globally.
 	// Env: BRIDGE_FORWARD_AUTH_URL
@@ -33,7 +33,7 @@ type Config struct {
 	// e.g. "https://app.hermeshq.net,http://localhost:3002"
 	// Env: BRIDGE_CORS_ORIGINS
 	DefaultCORSOrigins string `json:"defaultCORSOrigins" yaml:"defaultCORSOrigins"`
-	ConfigFile            string       `json:"-" yaml:"-"`
+	ConfigFile         string `json:"-" yaml:"-"`
 }
 
 func DefaultConfig() Config {
