@@ -354,9 +354,9 @@ deploymentAnnotations: {}
 podLabels: {}
 
 podSecurityContext:
-  runAsUser: 1000
-  runAsGroup: 1000
-  fsGroup: 1000
+  runAsUser: 10000
+  runAsGroup: 10000
+  fsGroup: 10000
   fsGroupChangePolicy: OnRootMismatch
   runAsNonRoot: true
   seccompProfile:
