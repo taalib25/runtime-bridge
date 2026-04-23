@@ -27,7 +27,12 @@ type Config struct {
 	// DefaultForwardAuthURL is applied to every workspace that doesn't set forwardAuthURL explicitly.
 	// Set to your backend's /auth/verify endpoint. Leave empty to disable ForwardAuth globally.
 	// Env: BRIDGE_FORWARD_AUTH_URL
-	DefaultForwardAuthURL string       `json:"defaultForwardAuthURL" yaml:"defaultForwardAuthURL"`
+	DefaultForwardAuthURL string `json:"defaultForwardAuthURL" yaml:"defaultForwardAuthURL"`
+	// DefaultCORSOrigins is a comma-separated list of allowed browser origins applied to every
+	// workspace that doesn't set corsOrigins explicitly.
+	// e.g. "https://app.hermeshq.net,http://localhost:3002"
+	// Env: BRIDGE_CORS_ORIGINS
+	DefaultCORSOrigins string `json:"defaultCORSOrigins" yaml:"defaultCORSOrigins"`
 	ConfigFile            string       `json:"-" yaml:"-"`
 }
 
@@ -68,6 +73,7 @@ func LoadConfig() (Config, error) {
 	overlayString(&cfg.HealthPath, "BRIDGE_HEALTH_PATH")
 	overlayString(&cfg.ReleasePrefix, "BRIDGE_RELEASE_PREFIX")
 	overlayString(&cfg.DefaultForwardAuthURL, "BRIDGE_FORWARD_AUTH_URL")
+	overlayString(&cfg.DefaultCORSOrigins, "BRIDGE_CORS_ORIGINS")
 
 	if err := overlayDuration(&cfg.SyncInterval, "BRIDGE_SYNC_INTERVAL"); err != nil {
 		return Config{}, err

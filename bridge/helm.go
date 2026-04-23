@@ -53,6 +53,11 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 			b.Logger.Printf("[CreateWorkspace] Warning: failed to create ForwardAuth middleware: %v", err)
 		}
 	}
+	if origins := parseCORSOrigins(spec.CORSOrigins); len(origins) > 0 {
+		if err := b.EnsureCORSMiddleware(ctx, ns, origins); err != nil {
+			b.Logger.Printf("[CreateWorkspace] Warning: failed to create CORS middleware: %v", err)
+		}
+	}
 
 	rel, err := install.RunWithContext(ctx, chart, values)
 	if err != nil {
@@ -88,6 +93,9 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 	if mwErr := b.DeleteForwardAuthMiddleware(ctx, workspaceID); mwErr != nil {
 		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete ForwardAuth middleware: %v", mwErr)
 	}
+	if mwErr := b.DeleteCORSMiddleware(ctx, workspaceID); mwErr != nil {
+		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete CORS middleware: %v", mwErr)
+	}
 	b.Metrics.WorkspaceHealth.DeleteLabelValues(b.ClusterName, workspaceID)
 	b.trackOperation("delete", "success", started)
 	return nil
@@ -122,6 +130,11 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 	if authURL := strings.TrimSpace(spec.ForwardAuthURL); authURL != "" {
 		if err := b.EnsureForwardAuthMiddleware(ctx, ns, authURL); err != nil {
 			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update ForwardAuth middleware: %v", err)
+		}
+	}
+	if origins := parseCORSOrigins(spec.CORSOrigins); len(origins) > 0 {
+		if err := b.EnsureCORSMiddleware(ctx, ns, origins); err != nil {
+			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update CORS middleware: %v", err)
 		}
 	}
 
@@ -300,13 +313,22 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			}},
 		}}
 	}
-	if strings.TrimSpace(spec.ForwardAuthURL) != "" {
+	{
 		ns := spec.Namespace
 		if ns == "" {
 			ns = spec.WorkspaceID
 		}
-		ingress["annotations"] = map[string]any{
-			"traefik.ingress.kubernetes.io/router.middlewares": forwardAuthAnnotation(ns),
+		var middlewareParts []string
+		if strings.TrimSpace(spec.CORSOrigins) != "" {
+			middlewareParts = append(middlewareParts, corsAnnotation(ns))
+		}
+		if strings.TrimSpace(spec.ForwardAuthURL) != "" {
+			middlewareParts = append(middlewareParts, forwardAuthAnnotation(ns))
+		}
+		if len(middlewareParts) > 0 {
+			ingress["annotations"] = map[string]any{
+				"traefik.ingress.kubernetes.io/router.middlewares": middlewareAnnotations(middlewareParts...),
+			}
 		}
 	}
 
@@ -475,5 +497,26 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	if strings.TrimSpace(spec.ForwardAuthURL) == "" && strings.TrimSpace(b.Config.DefaultForwardAuthURL) != "" {
 		spec.ForwardAuthURL = b.Config.DefaultForwardAuthURL
 	}
+	// Fall back to the bridge-level default if the caller didn't specify CORS origins.
+	if strings.TrimSpace(spec.CORSOrigins) == "" && strings.TrimSpace(b.Config.DefaultCORSOrigins) != "" {
+		spec.CORSOrigins = b.Config.DefaultCORSOrigins
+	}
 	return spec
+}
+
+// parseCORSOrigins splits a comma-separated origins string into a trimmed slice.
+// Returns nil if s is blank.
+func parseCORSOrigins(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

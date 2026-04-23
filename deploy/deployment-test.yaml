@@ -43,7 +43,9 @@ spec:
             - name: BRIDGE_SYNC_INTERVAL
               value: "5m"
             - name: BRIDGE_FORWARD_AUTH_URL
-              value: "https://api.hermeshq.net/auth/verify"
+              value: "https://api.hermeshq.net/api/client/auth/verify"
+            - name: BRIDGE_CORS_ORIGINS
+              value: "https://hermes-hut-client.vercel.app,http://localhost:3002"
           resources:
             requests:
               cpu: 100m
