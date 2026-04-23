@@ -79,7 +79,7 @@ func (b *Bridge) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	// Only overwrite the user's config.yaml if the caller explicitly sent a config block.
 	// A PUT for resources/plan only (no config field) must NOT wipe user's runtime edits.
-	spec.OverwriteConfig = len(spec.Config) > 0
+	spec.OverwriteConfig = !isEmptyHermesConfig(spec.HermesConfig)
 
 	op := b.submitOperation("update", workspaceID, func(ctx context.Context) error {
 		_, err := b.UpdateWorkspace(ctx, spec)

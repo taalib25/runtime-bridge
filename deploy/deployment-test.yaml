@@ -46,6 +46,8 @@ spec:
               value: "https://api.hermeshq.net/api/client/auth/verify"
             - name: BRIDGE_CORS_ORIGINS
               value: "https://hermes-hut-client.vercel.app,http://localhost:3002"
+            - name: BRIDGE_DEFAULT_DOMAIN
+              value: "hermeshq.net"
           resources:
             requests:
               cpu: 100m

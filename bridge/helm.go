@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -237,9 +238,12 @@ func (b *Bridge) ListWorkspaces(ctx context.Context) ([]WorkspaceStatus, error) 
 
 func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 	spec = b.normalizeWorkspaceSpec(spec)
-	repository, tag := splitImageReference(spec.Image)
-	if spec.ImageTag != "" {
-		tag = spec.ImageTag
+	repository, splitTag := splitImageReference(spec.Image)
+	// ImageTag from spec takes precedence; fall back to the tag embedded in the image
+	// reference, then to the normalizeWorkspaceSpec default ("latest").
+	tag := spec.ImageTag
+	if tag == "" {
+		tag = splitTag
 	}
 
 	values := map[string]any{
@@ -267,9 +271,9 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			"overwrite": spec.OverwriteConfig,
 		},
 		// config.values is what the chart's ConfigMap template renders into config.yaml.
-		// The backend sends spec.Config as the partial override; chart defaults fill the rest.
+		// The backend sends spec.HermesConfig as the partial override; chart defaults fill the rest.
 		"config": map[string]any{
-			"values": spec.Config,
+			"values": hermesConfigToMap(spec.HermesConfig),
 		},
 		// env is the chart's flat map of platform env vars (GATEWAY_ALLOW_ALL_USERS, etc.)
 		// extraEnv is for arbitrary additional env vars as a list.
@@ -525,8 +529,29 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	if spec.ClusterID == "" {
 		spec.ClusterID = b.ClusterName
 	}
+	// Default image to the official Hermes agent.
+	if strings.TrimSpace(spec.Image) == "" {
+		spec.Image = "nousresearch/hermes-agent"
+	}
+	// Default tag to "latest" only when the caller didn't embed a tag in the image
+	// reference (e.g. "image:v1.2") and didn't set ImageTag explicitly.
+	if strings.TrimSpace(spec.ImageTag) == "" {
+		_, embeddedTag := splitImageReference(spec.Image)
+		if embeddedTag == "" {
+			spec.ImageTag = "latest"
+		}
+	}
+	// Default namespace to the workspace ID (one namespace per tenant).
 	if spec.Namespace == "" {
-		spec.Namespace = b.Config.Namespace
+		if spec.WorkspaceID != "" {
+			spec.Namespace = spec.WorkspaceID
+		} else {
+			spec.Namespace = b.Config.Namespace
+		}
+	}
+	// Auto-create namespace when it's isolated per workspace.
+	if !spec.CreateNamespace && spec.Namespace == spec.WorkspaceID {
+		spec.CreateNamespace = true
 	}
 	if spec.HealthCheckPath == "" {
 		spec.HealthCheckPath = b.Config.HealthPath
@@ -537,11 +562,12 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	if spec.Network.Scheme == "" {
 		spec.Network.Scheme = "https"
 	}
+	// Derive host from workspaceID + default domain when not explicitly set.
+	if spec.Network.Host == "" && strings.TrimSpace(b.Config.DefaultDomain) != "" {
+		spec.Network.Host = spec.WorkspaceID + "." + b.Config.DefaultDomain
+	}
 	if spec.Secrets == nil {
 		spec.Secrets = map[string]string{}
-	}
-	if spec.Config == nil {
-		spec.Config = map[string]any{}
 	}
 	// Fall back to the bridge-level default if the caller didn't specify a ForwardAuth URL.
 	if strings.TrimSpace(spec.ForwardAuthURL) == "" && strings.TrimSpace(b.Config.DefaultForwardAuthURL) != "" {
@@ -552,6 +578,36 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 		spec.CORSOrigins = b.Config.DefaultCORSOrigins
 	}
 	return spec
+}
+
+// hermesConfigToMap converts the typed HermesConfig into the map[string]any
+// that Helm chart values expect under config.values. Fields with zero/nil values
+// are omitted so chart defaults take effect.
+func hermesConfigToMap(cfg HermesConfig) map[string]any {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	return m
+}
+
+// isEmptyHermesConfig reports whether the caller sent no config fields at all,
+// meaning we should not overwrite the agent's runtime config on the PVC.
+func isEmptyHermesConfig(cfg HermesConfig) bool {
+	return cfg.Model == nil &&
+		cfg.Agent == nil &&
+		cfg.Terminal == nil &&
+		cfg.Display == nil &&
+		cfg.Browser == nil &&
+		cfg.Memory == nil &&
+		cfg.Compression == nil &&
+		cfg.Security == nil &&
+		cfg.Voice == nil &&
+		cfg.Auxiliary == nil &&
+		cfg.Gateway == nil &&
+		cfg.Soul == nil
 }
 
 // parseCORSOrigins splits a comma-separated origins string into a trimmed slice.

@@ -33,7 +33,11 @@ type Config struct {
 	// e.g. "https://app.hermeshq.net,http://localhost:3002"
 	// Env: BRIDGE_CORS_ORIGINS
 	DefaultCORSOrigins string `json:"defaultCORSOrigins" yaml:"defaultCORSOrigins"`
-	ConfigFile         string `json:"-" yaml:"-"`
+	// DefaultDomain is appended to workspaceID to form the ingress host when network.host is unset.
+	// e.g. "hermeshq.net" → "tenant-abc.hermeshq.net"
+	// Env: BRIDGE_DEFAULT_DOMAIN
+	DefaultDomain string `json:"defaultDomain" yaml:"defaultDomain"`
+	ConfigFile    string `json:"-" yaml:"-"`
 }
 
 func DefaultConfig() Config {
@@ -74,6 +78,7 @@ func LoadConfig() (Config, error) {
 	overlayString(&cfg.ReleasePrefix, "BRIDGE_RELEASE_PREFIX")
 	overlayString(&cfg.DefaultForwardAuthURL, "BRIDGE_FORWARD_AUTH_URL")
 	overlayString(&cfg.DefaultCORSOrigins, "BRIDGE_CORS_ORIGINS")
+	overlayString(&cfg.DefaultDomain, "BRIDGE_DEFAULT_DOMAIN")
 
 	if err := overlayDuration(&cfg.SyncInterval, "BRIDGE_SYNC_INTERVAL"); err != nil {
 		return Config{}, err
