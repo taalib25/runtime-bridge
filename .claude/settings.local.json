@@ -14,7 +14,23 @@
       "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/chart/values.yaml)",
       "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/README.md)",
       "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/chart/templates/deployment.yaml)",
-      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/chart/templates/configmap.yaml)"
+      "Bash(curl -s https://raw.githubusercontent.com/ultraworkers/hermes-agent-helm-chart/main/chart/templates/configmap.yaml)",
+      "Bash(git -C /home/taalib/hermes-runtime-operator diff bridge/helm.go)",
+      "Bash(git *)",
+      "Bash(ssh *)",
+      "Bash(mkdir -p /home/taalib/hermes-runtime-operator/.claude/commands)",
+      "Bash(mkdir -p ~/.claude/commands)",
+      "Bash(docker build *)",
+      "WebSearch",
+      "WebFetch(domain:hermes-agent.nousresearch.com)",
+      "Bash(curl -s --max-time 15 \"https://raw.githubusercontent.com/openai/openai-node/master/src/streaming.ts\")",
+      "Bash(curl -s --max-time 20 \"https://raw.githubusercontent.com/NousResearch/hermes-agent/main/gateway/platforms/api_server.py\")",
+      "Bash(curl -s --max-time 15 \"https://raw.githubusercontent.com/openai/openai-node/master/src/core/client.ts\")",
+      "Bash(curl *)",
+      "Bash(python3 -m json.tool)",
+      "Bash(gh run *)",
+      "Bash(go test *)",
+      "Bash(go build *)"
     ]
   }
 }
