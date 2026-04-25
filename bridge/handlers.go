@@ -136,7 +136,7 @@ func (b *Bridge) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "cluster": b.ClusterName})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "cluster": b.ClusterName, "version": version, "build": build})
 }
 
 func (b *Bridge) handleReadyz(w http.ResponseWriter, r *http.Request) {
@@ -144,7 +144,7 @@ func (b *Bridge) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: "not ready", Details: err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "cluster": b.ClusterName})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "cluster": b.ClusterName, "version": version, "build": build})
 }
 
 func (b *Bridge) decodeWorkspaceRequest(r *http.Request, workspaceID string) (WorkspaceSpec, error) {

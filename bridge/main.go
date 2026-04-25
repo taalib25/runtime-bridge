@@ -13,6 +13,12 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
+// version is the semver release. build is the git SHA injected at build time.
+var (
+	version = "v0.1.0"
+	build   = "dev"
+)
+
 func main() {
 	cfg, err := LoadConfig()
 	if err != nil {

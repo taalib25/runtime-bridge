@@ -2,6 +2,7 @@
 FROM golang:1.25 AS builder
 ARG TARGETOS
 ARG TARGETARCH
+ARG GIT_SHA=dev
 
 WORKDIR /workspace
 COPY go.mod go.mod
@@ -10,7 +11,10 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o bridge ./bridge/
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -a \
+    -ldflags "-X main.build=${GIT_SHA}" \
+    -o bridge ./bridge/
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /

@@ -44,7 +44,7 @@ jobs:
           ssh-keyscan -H 178.104.185.60 >> ~/.ssh/known_hosts
 
       - name: Build image
-        run: docker build -t hermes-bridge:latest .
+        run: docker build -t hermes-bridge:latest --build-arg GIT_SHA=$(git rev-parse --short HEAD) .
 
       - name: Load image into k3s
         run: |
