@@ -187,6 +187,7 @@ func (b *Bridge) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided := r.Header.Get(sharedSecretHeader)
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(b.Config.BridgeSecret)) != 1 {
+			b.Logger.Printf("[Auth] 401 %s %s — missing or wrong %s (provided len=%d)", r.Method, r.URL.Path, sharedSecretHeader, len(provided))
 			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized"})
 			return
 		}
