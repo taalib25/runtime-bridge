@@ -45,9 +45,15 @@ type Bridge struct {
 	Logger         *log.Logger
 	Metrics        *Metrics
 
-	ready      atomic.Bool
-	mu         sync.RWMutex
-	operations map[string]*Operation
+	ready          atomic.Bool
+	mu             sync.RWMutex
+	operations     map[string]*Operation
+	pendingCreates sync.Map // workspaceID → pendingCreate; throttles duplicate creates
+}
+
+type pendingCreate struct {
+	apiKey string
+	until  time.Time
 }
 
 func NewBridge(cfg Config) (*Bridge, error) {

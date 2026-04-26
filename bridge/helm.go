@@ -573,6 +573,15 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	if spec.Secrets == nil {
 		spec.Secrets = map[string]string{}
 	}
+	// Inject workspace identity into pod env so the agent knows its context.
+	if spec.EnvMap == nil {
+		spec.EnvMap = map[string]string{}
+	}
+	spec.EnvMap["WORKSPACE_ID"] = spec.WorkspaceID
+	spec.EnvMap["TENANT_ID"] = spec.TenantID
+	if spec.Plan != "" {
+		spec.EnvMap["PLAN"] = spec.Plan
+	}
 	// Fall back to the bridge-level default if the caller didn't specify a ForwardAuth URL.
 	if strings.TrimSpace(spec.ForwardAuthURL) == "" && strings.TrimSpace(b.Config.DefaultForwardAuthURL) != "" {
 		spec.ForwardAuthURL = b.Config.DefaultForwardAuthURL

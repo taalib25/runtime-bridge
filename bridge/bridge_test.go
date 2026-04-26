@@ -80,49 +80,78 @@ func TestHealthz(t *testing.T) {
 
 // --- Request decoding ---
 
+const testWID = "ws-1234567890abcdef"
+
 func TestDecodeWorkspaceRequest_Valid(t *testing.T) {
 	b := newTestBridge("s")
-	payload := `{"tenantId":"t1","image":"nousresearch/hermes-agent"}`
+	payload := `{"tenantId":"t1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	spec, err := b.decodeWorkspaceRequest(req, "ws-1")
+	spec, err := b.decodeWorkspaceRequest(req, testWID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if spec.WorkspaceID != "ws-1" {
-		t.Errorf("expected workspaceId=ws-1, got %q", spec.WorkspaceID)
+	if spec.WorkspaceID != testWID {
+		t.Errorf("expected workspaceId=%s, got %q", testWID, spec.WorkspaceID)
 	}
 	if spec.TenantID != "t1" {
 		t.Errorf("expected tenantId=t1, got %q", spec.TenantID)
+	}
+	// image should be defaulted even when not sent
+	if spec.Image == "" {
+		t.Errorf("expected image to be defaulted, got empty")
 	}
 }
 
 func TestDecodeWorkspaceRequest_MissingTenantID(t *testing.T) {
 	b := newTestBridge("s")
-	payload := `{"image":"nousresearch/hermes-agent"}`
+	payload := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeWorkspaceRequest(req, "ws-1")
+	_, err := b.decodeWorkspaceRequest(req, testWID)
 	if err == nil || !strings.Contains(err.Error(), "tenantId") {
 		t.Fatalf("expected tenantId error, got %v", err)
 	}
 }
 
-func TestDecodeWorkspaceRequest_MissingImage(t *testing.T) {
+func TestDecodeWorkspaceRequest_ImageOptional(t *testing.T) {
 	b := newTestBridge("s")
 	payload := `{"tenantId":"t1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeWorkspaceRequest(req, "ws-1")
-	if err == nil || !strings.Contains(err.Error(), "image") {
-		t.Fatalf("expected image error, got %v", err)
+	spec, err := b.decodeWorkspaceRequest(req, testWID)
+	if err != nil {
+		t.Fatalf("image should be optional, got error: %v", err)
+	}
+	if spec.Image != "nousresearch/hermes-agent" {
+		t.Errorf("expected defaulted image, got %q", spec.Image)
 	}
 }
 
 func TestDecodeWorkspaceRequest_WorkspaceIDMismatch(t *testing.T) {
 	b := newTestBridge("s")
-	payload := `{"workspaceId":"other","tenantId":"t1","image":"img"}`
+	payload := `{"workspaceId":"ws-ffffffffffffffff","tenantId":"t1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeWorkspaceRequest(req, "ws-1")
+	_, err := b.decodeWorkspaceRequest(req, testWID)
 	if err == nil {
 		t.Fatal("expected mismatch error")
+	}
+}
+
+func TestDecodeWorkspaceRequest_InvalidWorkspaceIDFormat(t *testing.T) {
+	b := newTestBridge("s")
+	payload := `{"tenantId":"t1"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
+	_, err := b.decodeWorkspaceRequest(req, "ws-1")
+	if err == nil || !strings.Contains(err.Error(), "workspaceId") {
+		t.Fatalf("expected workspaceId format error, got %v", err)
+	}
+}
+
+func TestDecodeWorkspaceRequest_InvalidPlan(t *testing.T) {
+	b := newTestBridge("s")
+	payload := `{"tenantId":"t1","plan":"premium"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
+	_, err := b.decodeWorkspaceRequest(req, testWID)
+	if err == nil || !strings.Contains(err.Error(), "plan") {
+		t.Fatalf("expected plan error, got %v", err)
 	}
 }
 

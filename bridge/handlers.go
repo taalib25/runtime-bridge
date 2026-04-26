@@ -5,10 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 )
+
+var wsIDPattern = regexp.MustCompile(`^ws-[0-9a-f]{16}$`)
+
+func validWorkspaceID(id string) bool { return wsIDPattern.MatchString(id) }
 
 func (b *Bridge) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	workspaces, err := b.ListWorkspaces(r.Context())
@@ -23,8 +29,22 @@ func (b *Bridge) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
 	spec, err := b.decodeWorkspaceRequest(r, workspaceID)
 	if err != nil {
+		b.Logger.Printf("[CreateWorkspace] validation failed for %s: %v", workspaceID, err)
 		writeError(w, http.StatusBadRequest, err)
 		return
+	}
+
+	// Throttle: if a create is already in-flight for this workspace, return the
+	// existing key immediately without launching another Helm install.
+	if v, ok := b.pendingCreates.Load(workspaceID); ok {
+		if rec := v.(pendingCreate); time.Now().Before(rec.until) {
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"workspaceId": workspaceID,
+				"status":      "provisioning",
+				"secrets":     map[string]string{"API_SERVER_KEY": rec.apiKey},
+			})
+			return
+		}
 	}
 
 	// Ensure API_SERVER_KEY is set before the async op so we can return it now.
@@ -37,21 +57,20 @@ func (b *Bridge) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	apiKey := spec.Secrets["API_SERVER_KEY"]
 
-	op := b.submitOperation("create", workspaceID, func(ctx context.Context) error {
+	b.pendingCreates.Store(workspaceID, pendingCreate{
+		apiKey: apiKey,
+		until:  time.Now().Add(b.Config.OperationTimeout),
+	})
+
+	b.submitOperation("create", workspaceID, func(ctx context.Context) error {
 		_, err := b.CreateWorkspace(ctx, spec)
 		return err
 	})
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"id":           op.ID,
-		"type":         op.Type,
-		"workspaceId":  op.WorkspaceID,
-		"status":       op.Status,
-		"message":      op.Message,
-		"startedAt":    op.StartedAt,
-		"secrets": map[string]string{
-			"API_SERVER_KEY": apiKey,
-		},
+		"workspaceId": workspaceID,
+		"status":      "provisioning",
+		"secrets":     map[string]string{"API_SERVER_KEY": apiKey},
 	})
 }
 
@@ -156,11 +175,18 @@ func (b *Bridge) decodeWorkspaceRequest(r *http.Request, workspaceID string) (Wo
 		return WorkspaceSpec{}, fmt.Errorf("workspaceId in body must match path parameter")
 	}
 	spec.WorkspaceID = workspaceID
+	if !validWorkspaceID(workspaceID) {
+		return WorkspaceSpec{}, fmt.Errorf("workspaceId must match ws-[0-9a-f]{16}")
+	}
 	if strings.TrimSpace(spec.TenantID) == "" {
 		return WorkspaceSpec{}, fmt.Errorf("tenantId is required")
 	}
-	if strings.TrimSpace(spec.Image) == "" {
-		return WorkspaceSpec{}, fmt.Errorf("image is required")
+	if spec.Plan != "" {
+		switch spec.Plan {
+		case "free", "pro", "enterprise":
+		default:
+			return WorkspaceSpec{}, fmt.Errorf("plan must be one of: free, pro, enterprise")
+		}
 	}
 	return b.normalizeWorkspaceSpec(spec), nil
 }
