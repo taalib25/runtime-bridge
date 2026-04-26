@@ -309,7 +309,12 @@ func (b *Bridge) getWorkspace(ctx context.Context, workspaceID string) (*Workspa
 
 func (b *Bridge) lookupRelease(ctx context.Context, workspaceID string) (*release.Release, error) {
 	releaseName := b.releaseName(workspaceID)
-	lister := action.NewList(b.HelmConfig)
+	// Workspace releases live in their own namespace — use a per-workspace config.
+	helmCfg, err := newHelmActionConfigForNamespace(b.Config, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("helm config for workspace %s: %w", workspaceID, err)
+	}
+	lister := action.NewList(helmCfg)
 	lister.All = true
 	lister.Filter = fmt.Sprintf("^%s$", releaseName)
 	releases, err := lister.Run()

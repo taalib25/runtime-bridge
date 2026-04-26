@@ -201,7 +201,14 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 func (b *Bridge) ListWorkspaces(ctx context.Context) ([]WorkspaceStatus, error) {
 	b.Logger.Printf("[ListWorkspaces] Starting list operation")
 
-	lister := action.NewList(b.HelmConfig)
+	// Use an empty-namespace config so the secret driver queries across all
+	// namespaces. The bridge's default HelmConfig is scoped to hermes-bridge
+	// and cannot see releases installed into workspace namespaces.
+	allNsCfg, err := newHelmActionConfigForNamespace(b.Config, "")
+	if err != nil {
+		return nil, fmt.Errorf("helm config for all-namespace list: %w", err)
+	}
+	lister := action.NewList(allNsCfg)
 	lister.All = true
 	lister.AllNamespaces = true
 	releases, err := lister.Run()
