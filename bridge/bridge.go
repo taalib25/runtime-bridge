@@ -214,15 +214,6 @@ func (b *Bridge) updateOperation(id string, mutate func(*Operation)) {
 	}
 }
 
-func (b *Bridge) getOperation(id string) *Operation {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if op, ok := b.operations[id]; ok {
-		copy := *op
-		return &copy
-	}
-	return nil
-}
 
 func (b *Bridge) submitOperation(operationType, workspaceID string, fn func(context.Context) error) *Operation {
 	op := &Operation{

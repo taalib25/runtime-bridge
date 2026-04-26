@@ -48,7 +48,7 @@ func DefaultConfig() Config {
 		ShutdownTimeout:   10 * time.Second,
 		HTTPClientTimeout: 5 * time.Second,
 		OperationTimeout:  10 * time.Minute,
-		HealthPath:        "/healthz",
+		HealthPath:        "/health",
 		ReleasePrefix:     "",
 		CreateNamespace:   false,
 	}

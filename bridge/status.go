@@ -76,7 +76,9 @@ func (b *Bridge) collectWorkspaceStatus(ctx context.Context, spec WorkspaceSpec,
 }
 
 func (b *Bridge) checkWorkspaceHealth(ctx context.Context, spec WorkspaceSpec) (bool, int, error) {
-	url := workspaceHealthURL(spec, b.Config.HealthPath)
+	// Probe the internal Kubernetes service directly so health checks bypass
+	// Traefik ForwardAuth — the pod is healthy even before the auth endpoint exists.
+	url := workspaceInternalHealthURL(spec, b.Config.HealthPath)
 	if url == "" {
 		return false, 0, fmt.Errorf("workspace URL is not configured")
 	}
@@ -134,25 +136,37 @@ func workspaceURL(spec WorkspaceSpec) string {
 	return fmt.Sprintf("%s://%s%s", scheme, host, path)
 }
 
-func workspaceHealthURL(spec WorkspaceSpec, defaultPath string) string {
-	base := workspaceURL(spec)
-	if base == "" {
+func resolveHealthPath(spec WorkspaceSpec, defaultPath string) string {
+	if p := spec.Network.HealthPath; p != "" {
+		return p
+	}
+	if p := spec.HealthCheckPath; p != "" {
+		return p
+	}
+	if defaultPath != "" {
+		return defaultPath
+	}
+	return "/health"
+}
+
+// workspaceInternalHealthURL returns the in-cluster Kubernetes service URL for
+// health probing, bypassing Traefik and ForwardAuth entirely.
+// Pattern: http://{serviceName}.{namespace}.svc.cluster.local:8642{healthPath}
+// Both service name and namespace equal spec.WorkspaceID by convention.
+func workspaceInternalHealthURL(spec WorkspaceSpec, defaultPath string) string {
+	ns := spec.Namespace
+	if ns == "" {
+		ns = spec.WorkspaceID
+	}
+	svc := spec.WorkspaceID
+	if ns == "" || svc == "" {
 		return ""
 	}
-	healthPath := spec.Network.HealthPath
-	if healthPath == "" {
-		healthPath = spec.HealthCheckPath
+	healthPath := resolveHealthPath(spec, defaultPath)
+	if !strings.HasPrefix(healthPath, "/") {
+		healthPath = "/" + healthPath
 	}
-	if healthPath == "" {
-		healthPath = defaultPath
-	}
-	if healthPath == "" {
-		healthPath = "/healthz"
-	}
-	if strings.HasPrefix(healthPath, "/") {
-		return strings.TrimRight(base, "/") + healthPath
-	}
-	return strings.TrimRight(base, "/") + "/" + healthPath
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:8642%s", svc, ns, healthPath)
 }
 
 func convertDeploymentConditions(conditions []appsv1.DeploymentCondition) []metav1.Condition {
