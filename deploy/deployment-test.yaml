@@ -48,6 +48,8 @@ spec:
               value: "https://hermes-hut-client.vercel.app,http://localhost:3002"
             - name: BRIDGE_DEFAULT_DOMAIN
               value: "hermeshq.net"
+            - name: BRIDGE_HEALTH_PATH
+              value: "/health"
           resources:
             requests:
               cpu: 100m

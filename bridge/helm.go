@@ -577,6 +577,11 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	if spec.Network.Host == "" && strings.TrimSpace(b.Config.DefaultDomain) != "" {
 		spec.Network.Host = spec.WorkspaceID + "." + b.Config.DefaultDomain
 	}
+	// Default ingress to enabled whenever a host is configured.
+	if spec.IngressEnabled == nil && spec.Network.Host != "" {
+		t := true
+		spec.IngressEnabled = &t
+	}
 	if spec.Secrets == nil {
 		spec.Secrets = map[string]string{}
 	}
