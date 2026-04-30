@@ -44,6 +44,7 @@ func (b *Bridge) collectWorkspaceStatus(ctx context.Context, spec WorkspaceSpec,
 		ReleaseName:   releaseName,
 		Namespace:     namespace,
 		URL:           workspaceURL(spec),
+		DashboardURL:  dashboardURL(spec),
 		CreatedAt:     createdAt.UTC(),
 		LastCheckedAt: time.Now().UTC(),
 		Spec:          spec,
@@ -118,6 +119,26 @@ func derivePhase(status WorkspaceStatus, healthErr error) string {
 		return "failed"
 	}
 	return "creating"
+}
+
+func dashboardHost(spec WorkspaceSpec) string {
+	host := spec.Network.host()
+	if host == "" {
+		return ""
+	}
+	return "dash-" + host
+}
+
+func dashboardURL(spec WorkspaceSpec) string {
+	h := dashboardHost(spec)
+	if h == "" {
+		return ""
+	}
+	scheme := spec.Network.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	return scheme + "://" + h
 }
 
 func workspaceURL(spec WorkspaceSpec) string {

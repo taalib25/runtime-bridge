@@ -50,6 +50,10 @@ type WorkspaceSpec struct {
 	// Plan is the pricing tier: "free", "pro", "enterprise".
 	// Surfaces as pod label hermes.ai/plan for metrics and cost attribution.
 	Plan string `json:"plan,omitempty"`
+	// DashboardEnabled starts a hermes dashboard sidecar (port 9119) and creates
+	// a second IngressRoute at dash-{ws-id}.{domain}.
+	// WARNING: the dashboard has no built-in auth — set ForwardAuthURL to protect it.
+	DashboardEnabled bool `json:"dashboardEnabled,omitempty"`
 }
 
 // ─── Hermes config.yaml ──────────────────────────────────────────────────────
@@ -285,6 +289,7 @@ type WorkspaceStatus struct {
 	Phase            string        `json:"phase"`
 	Healthy          bool          `json:"healthy"`
 	URL              string        `json:"url,omitempty"`
+	DashboardURL     string        `json:"dashboardURL,omitempty"`
 	Replicas         int32         `json:"replicas"`
 	ReadyReplicas    int32         `json:"readyReplicas"`
 	PodPhase         string        `json:"podPhase,omitempty"`

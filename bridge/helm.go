@@ -89,6 +89,17 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		}
 	}
 
+	if spec.DashboardEnabled {
+		if !hasAuth {
+			b.Logger.Printf("[CreateWorkspace] WARNING: dashboardEnabled=true but ForwardAuthURL not set — dash-%s is publicly accessible", spec.Network.host())
+		}
+		if dHost := dashboardHost(spec); dHost != "" {
+			if err := b.EnsureDashboardIngressRoute(ctx, ns, dHost, ns, hasCORS, hasAuth); err != nil {
+				b.Logger.Printf("[CreateWorkspace] Warning: failed to create dashboard IngressRoute: %v", err)
+			}
+		}
+	}
+
 	b.trackOperation("create", "success", started)
 	b.Logger.Printf("[CreateWorkspace] Created release %s in %s (took %v)", rel.Name, rel.Namespace, time.Since(started))
 	return rel, nil
@@ -127,6 +138,9 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 	// Best-effort: remove Traefik resources if they exist.
 	if mwErr := b.DeleteIngressRoute(ctx, workspaceID); mwErr != nil {
 		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete IngressRoute: %v", mwErr)
+	}
+	if mwErr := b.DeleteDashboardIngressRoute(ctx, workspaceID); mwErr != nil {
+		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete dashboard IngressRoute: %v", mwErr)
 	}
 	if mwErr := b.DeleteForwardAuthMiddleware(ctx, workspaceID); mwErr != nil {
 		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete ForwardAuth middleware: %v", mwErr)
@@ -192,6 +206,19 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		} else {
 			b.deleteHelmIngress(ctx, ns)
 		}
+	}
+
+	if spec.DashboardEnabled {
+		if !hasAuth {
+			b.Logger.Printf("[UpdateWorkspace] WARNING: dashboardEnabled=true but ForwardAuthURL not set — dash-%s is publicly accessible", spec.Network.host())
+		}
+		if dHost := dashboardHost(spec); dHost != "" {
+			if err := b.EnsureDashboardIngressRoute(ctx, ns, dHost, ns, hasCORS, hasAuth); err != nil {
+				b.Logger.Printf("[UpdateWorkspace] Warning: failed to update dashboard IngressRoute: %v", err)
+			}
+		}
+	} else {
+		_ = b.DeleteDashboardIngressRoute(ctx, ns)
 	}
 
 	b.trackOperation("update", "success", started)
@@ -296,14 +323,17 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		},
 		"service": map[string]any{
 			"enabled": true,
-			"ports": []any{
-				map[string]any{
-					"name":       "api-server",
-					"port":       8642,
-					"targetPort": 8642,
-					"protocol":   "TCP",
-				},
-			},
+			"ports": func() []any {
+				ports := []any{map[string]any{
+					"name": "api-server", "port": 8642, "targetPort": 8642, "protocol": "TCP",
+				}}
+				if spec.DashboardEnabled {
+					ports = append(ports, map[string]any{
+						"name": "dashboard", "port": int64(9119), "targetPort": int64(9119), "protocol": "TCP",
+					})
+				}
+				return ports
+			}(),
 		},
 		"apiServer": map[string]any{
 			"enabled":     true,
@@ -320,6 +350,29 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 
 	if spec.Plan != "" {
 		values["podLabels"] = map[string]any{"hermes.ai/plan": spec.Plan}
+	}
+
+	if spec.DashboardEnabled {
+		// GATEWAY_HEALTH_URL: pod shares network namespace, so 127.0.0.1 reaches the gateway container
+		dashEnv := []any{
+			map[string]any{"name": "GATEWAY_HEALTH_URL", "value": "http://127.0.0.1:8642"},
+		}
+		for k, v := range spec.EnvMap {
+			dashEnv = append(dashEnv, map[string]any{"name": k, "value": v})
+		}
+		values["extraContainers"] = []any{map[string]any{
+			"name":  "dashboard",
+			"image": repository + ":" + tag,
+			// args (not command) — entrypoint is already `hermes`; args selects the subcommand
+			"args": []any{"dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--insecure"},
+			"ports": []any{map[string]any{
+				"name": "dashboard", "containerPort": int64(9119), "protocol": "TCP",
+			}},
+			"env": dashEnv,
+			"volumeMounts": []any{map[string]any{
+				"name": "data", "mountPath": "/opt/data",
+			}},
+		}}
 	}
 
 	if policy := strings.TrimSpace(spec.ImagePullPolicy); policy != "" {
