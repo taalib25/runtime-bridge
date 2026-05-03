@@ -151,6 +151,8 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/workspaces/{id}", b.handleDeleteWorkspace).Methods(http.MethodDelete)
 	v1.HandleFunc("/workspaces/{id}/status", b.handleGetStatus).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{id}/health", b.handleHealth).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/operations", b.handleListWorkspaceOperations).Methods(http.MethodGet)
+	v1.HandleFunc("/operations/{id}", b.handleGetOperation).Methods(http.MethodGet)
 
 	return b.metricsMiddleware(r)
 }
@@ -250,6 +252,35 @@ func (b *Bridge) submitOperation(operationType, workspaceID string, fn func(cont
 	}()
 
 	return op
+}
+
+func (b *Bridge) startOperationCleanup(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			// Evict completed operations older than 1 hour.
+			cutoff := time.Now().Add(-1 * time.Hour)
+			b.mu.Lock()
+			for id, op := range b.operations {
+				if op.CompletedAt != nil && op.CompletedAt.Before(cutoff) {
+					delete(b.operations, id)
+				}
+			}
+			b.mu.Unlock()
+			// Evict expired pendingCreates entries. These are checked on read
+			// but never deleted, causing the map to grow unbounded over time.
+			b.pendingCreates.Range(func(k, v any) bool {
+				if rec := v.(pendingCreate); time.Now().After(rec.until) {
+					b.pendingCreates.Delete(k)
+				}
+				return true
+			})
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 func (b *Bridge) releaseName(workspaceID string) string {

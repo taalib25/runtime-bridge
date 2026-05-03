@@ -296,9 +296,16 @@ type WorkspaceStatus struct {
 	Conditions       []string      `json:"conditions,omitempty"`
 	Message          string        `json:"message,omitempty"`
 	HealthStatusCode int           `json:"healthStatusCode,omitempty"`
-	CreatedAt        time.Time     `json:"createdAt,omitempty"`
-	LastCheckedAt    time.Time     `json:"lastCheckedAt,omitempty"`
-	Spec             WorkspaceSpec `json:"spec,omitempty"`
+	// WaitingReason is the container Waiting.Reason from Kubernetes when a
+	// container is not running. Common values: CrashLoopBackOff, ImagePullBackOff,
+	// ErrImagePull, OOMKilled, CreateContainerConfigError. Empty when healthy.
+	WaitingReason string `json:"waitingReason,omitempty"`
+	// RestartCount is the total restart count across all containers in the pod.
+	// A non-zero value indicates the container has crashed at least once.
+	RestartCount  int32     `json:"restartCount,omitempty"`
+	CreatedAt     time.Time `json:"createdAt,omitempty"`
+	LastCheckedAt time.Time `json:"lastCheckedAt,omitempty"`
+	Spec          WorkspaceSpec `json:"spec,omitempty"`
 }
 
 type Workspace struct {

@@ -50,18 +50,21 @@ func (b *Bridge) collectWorkspaceStatus(ctx context.Context, spec WorkspaceSpec,
 		Spec:          spec,
 	}
 
-	if len(deployments.Items) > 0 {
-		deployment := selectDeployment(deployments.Items, releaseName)
-		status.Replicas = deployment.Status.Replicas
-		status.ReadyReplicas = deployment.Status.ReadyReplicas
-		status.Conditions = deploymentConditions(convertDeploymentConditions(deployment.Status.Conditions))
-		status.Message = deploymentMessage(deployment)
+	if dep := selectDeployment(deployments.Items, releaseName); dep != nil {
+		status.Replicas = dep.Status.Replicas
+		status.ReadyReplicas = dep.Status.ReadyReplicas
+		status.Conditions = deploymentConditions(convertDeploymentConditions(dep.Status.Conditions))
+		status.Message = deploymentMessage(*dep)
 	}
 
-	if len(pods.Items) > 0 {
-		pod := selectPod(pods.Items)
+	if pod := selectPod(pods.Items); pod != nil {
 		status.PodPhase = string(pod.Status.Phase)
-		if message := podMessage(pod); message != "" {
+		status.WaitingReason = containerWaitingReason(pod)
+		status.RestartCount = podRestartCount(pod)
+		if oomKilled(pod) && status.WaitingReason == "" {
+			status.WaitingReason = "OOMKilled"
+		}
+		if message := podMessage(*pod); message != "" {
 			status.Message = message
 		}
 	}
@@ -74,6 +77,44 @@ func (b *Bridge) collectWorkspaceStatus(ctx context.Context, spec WorkspaceSpec,
 	}
 	status.Phase = derivePhase(status, healthErr)
 	return status, nil
+}
+
+// containerWaitingReason returns the Waiting.Reason of the first container not
+// yet running. Common values: CrashLoopBackOff, ImagePullBackOff, ErrImagePull,
+// CreateContainerConfigError, CreateContainerError, RunContainerError.
+func containerWaitingReason(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return cs.State.Waiting.Reason
+		}
+	}
+	// Also check init containers — a stuck init container blocks everything.
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return "Init:" + cs.State.Waiting.Reason
+		}
+	}
+	return ""
+}
+
+// podRestartCount returns the total restart count across all containers.
+func podRestartCount(pod *corev1.Pod) int32 {
+	var total int32
+	for _, cs := range pod.Status.ContainerStatuses {
+		total += cs.RestartCount
+	}
+	return total
+}
+
+// oomKilled returns true if any container was last terminated due to OOM.
+func oomKilled(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.LastTerminationState.Terminated != nil &&
+			cs.LastTerminationState.Terminated.Reason == "OOMKilled" {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Bridge) checkWorkspaceHealth(ctx context.Context, spec WorkspaceSpec) (bool, int, error) {
@@ -97,27 +138,36 @@ func (b *Bridge) checkWorkspaceHealth(ctx context.Context, spec WorkspaceSpec) (
 }
 
 func derivePhase(status WorkspaceStatus, healthErr error) string {
+	// Pod-level hard failure (evicted, node issues, OOM at pod level).
 	if strings.EqualFold(status.PodPhase, string(corev1.PodFailed)) {
 		return "failed"
 	}
+
+	// Container-level error states — pod may be Running or Pending but the
+	// container is definitively broken and needs user intervention.
+	switch status.WaitingReason {
+	case "CrashLoopBackOff", "RunContainerError", "PostStartHookError",
+		"CreateContainerError", "CreateContainerConfigError":
+		return "error"
+	case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
+		return "error"
+	}
+	if status.WaitingReason == "OOMKilled" {
+		return "error"
+	}
+
+	// Fully healthy.
 	if status.ReadyReplicas > 0 && status.Healthy && healthErr == nil {
 		return "ready"
 	}
-	if status.Replicas == 0 && status.ReadyReplicas == 0 {
-		return "creating"
+
+	// Pod is Running but app hasn't passed health check yet — still warming up.
+	// Do NOT return "failed" here: health check failure during startup is expected.
+	if strings.EqualFold(status.PodPhase, string(corev1.PodRunning)) {
+		return "starting"
 	}
-	if strings.EqualFold(status.PodPhase, string(corev1.PodPending)) {
-		return "creating"
-	}
-	if healthErr != nil && status.ReadyReplicas == 0 {
-		return "failed"
-	}
-	if status.ReadyReplicas < status.Replicas {
-		return "creating"
-	}
-	if !status.Healthy {
-		return "failed"
-	}
+
+	// Not yet scheduled, waiting for resources, or init containers still running.
 	return "creating"
 }
 
@@ -226,20 +276,26 @@ func podMessage(pod corev1.Pod) string {
 	return pod.Status.Message
 }
 
-func selectDeployment(items []appsv1.Deployment, releaseName string) appsv1.Deployment {
-	for _, item := range items {
-		if item.Name == releaseName {
-			return item
+func selectDeployment(items []appsv1.Deployment, releaseName string) *appsv1.Deployment {
+	for i := range items {
+		if items[i].Name == releaseName {
+			return &items[i]
 		}
 	}
-	return items[0]
+	if len(items) > 0 {
+		return &items[0]
+	}
+	return nil
 }
 
-func selectPod(items []corev1.Pod) corev1.Pod {
-	for _, item := range items {
-		if item.Status.Phase == corev1.PodRunning {
-			return item
+func selectPod(items []corev1.Pod) *corev1.Pod {
+	for i := range items {
+		if items[i].Status.Phase == corev1.PodRunning {
+			return &items[i]
 		}
 	}
-	return items[0]
+	if len(items) > 0 {
+		return &items[0]
+	}
+	return nil
 }

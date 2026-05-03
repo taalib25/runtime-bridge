@@ -119,6 +119,11 @@ func (b *Bridge) deleteHelmIngress(ctx context.Context, namespace string) {
 
 func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error {
 	started := time.Now()
+
+	// Write tombstone before uninstalling so the record survives even if
+	// the uninstall itself fails. Idempotent — safe for QStash retries.
+	b.writeTombstone(ctx, workspaceID)
+
 	helmCfg, err := b.helmConfigForNamespace(workspaceID)
 	if err != nil {
 		b.trackOperation("delete", "failure", started)
@@ -126,16 +131,25 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 	}
 	uninstall := action.NewUninstall(helmCfg)
 	uninstall.Wait = false
+	// KeepHistory preserves the Helm release secret in the namespace after
+	// uninstall. This allows audit inspection via `helm history` and recovery
+	// via `helm rollback`. The namespace itself is intentionally NOT deleted —
+	// it holds the PVC data and release history as a safe audit record.
+	uninstall.KeepHistory = true
 	_, err = uninstall.Run(b.releaseName(workspaceID))
 	if err != nil {
-		if strings.Contains(err.Error(), "release: not found") {
+		// "already uninstalled" happens when QStash delivers the same delete
+		// message twice — treat as success so QStash marks it delivered.
+		if strings.Contains(err.Error(), "release: not found") ||
+			strings.Contains(err.Error(), "already uninstalled") {
 			b.trackOperation("delete", "success", started)
 			return nil
 		}
 		b.trackOperation("delete", "failure", started)
 		return err
 	}
-	// Best-effort: remove Traefik resources if they exist.
+	// Best-effort: remove Traefik routing resources. The release uninstall
+	// already removed the Deployment/Service; these are bridge-managed extras.
 	if mwErr := b.DeleteIngressRoute(ctx, workspaceID); mwErr != nil {
 		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete IngressRoute: %v", mwErr)
 	}
@@ -150,7 +164,30 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 	}
 	b.Metrics.WorkspaceHealth.DeleteLabelValues(b.ClusterName, workspaceID)
 	b.trackOperation("delete", "success", started)
+	b.Logger.Printf("[DeleteWorkspace] Deleted release %s (namespace preserved with tombstone + helm history)", workspaceID)
 	return nil
+}
+
+// writeTombstone annotates the workspace namespace with deletion metadata.
+// The namespace is intentionally kept alive — it holds the PVC data and the
+// Helm release history (--keep-history). The tombstone marks it as logically
+// deleted so operators and tooling know not to treat it as active.
+// This is idempotent: calling it twice just updates the timestamp.
+func (b *Bridge) writeTombstone(ctx context.Context, workspaceID string) {
+	ns, err := b.KubeClient.CoreV1().Namespaces().Get(ctx, workspaceID, metav1.GetOptions{})
+	if err != nil {
+		// Namespace may not exist (already deleted or never created) — not an error.
+		return
+	}
+	if ns.Annotations == nil {
+		ns.Annotations = map[string]string{}
+	}
+	ns.Annotations["hermes.io/deleted-at"] = time.Now().UTC().Format(time.RFC3339)
+	ns.Annotations["hermes.io/deleted-by"] = "bridge"
+	ns.Annotations["hermes.io/release-preserved"] = "true"
+	if _, err := b.KubeClient.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
+		b.Logger.Printf("[DeleteWorkspace] Warning: failed to write tombstone annotation to namespace %s: %v", workspaceID, err)
+	}
 }
 
 func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*release.Release, error) {
@@ -646,10 +683,6 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	spec.EnvMap["TENANT_ID"] = spec.TenantID
 	if spec.Plan != "" {
 		spec.EnvMap["PLAN"] = spec.Plan
-	}
-	// Fall back to the bridge-level default if the caller didn't specify a ForwardAuth URL.
-	if strings.TrimSpace(spec.ForwardAuthURL) == "" && strings.TrimSpace(b.Config.DefaultForwardAuthURL) != "" {
-		spec.ForwardAuthURL = b.Config.DefaultForwardAuthURL
 	}
 	// Fall back to the bridge-level default if the caller didn't specify CORS origins.
 	if strings.TrimSpace(spec.CORSOrigins) == "" && strings.TrimSpace(b.Config.DefaultCORSOrigins) != "" {

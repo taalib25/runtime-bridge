@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +78,10 @@ func (b *Bridge) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 
 func (b *Bridge) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
 	workspace, err := b.getWorkspace(r.Context(), workspaceID)
 	if err != nil {
 		if isWorkspaceNotFound(err) {
@@ -90,6 +96,23 @@ func (b *Bridge) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 
 func (b *Bridge) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+
+	// Sync existence check before submitting the async operation. Without this,
+	// a PUT on a non-existent workspace returns 202 and silently fails ~10min
+	// later — QStash would mark the delivery as successful despite the failure.
+	if _, err := b.lookupRelease(r.Context(), workspaceID); err != nil {
+		if isWorkspaceNotFound(err) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	spec, err := b.decodeWorkspaceRequest(r, workspaceID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -109,6 +132,10 @@ func (b *Bridge) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 
 func (b *Bridge) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
 	op := b.submitOperation("delete", workspaceID, func(ctx context.Context) error {
 		return b.DeleteWorkspace(ctx, workspaceID)
 	})
@@ -117,6 +144,10 @@ func (b *Bridge) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 
 func (b *Bridge) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
 	status, err := b.GetWorkspaceStatus(r.Context(), workspaceID)
 	if err != nil {
 		if isWorkspaceNotFound(err) {
@@ -131,6 +162,10 @@ func (b *Bridge) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 
 func (b *Bridge) handleHealth(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
 	status, err := b.GetWorkspaceStatus(r.Context(), workspaceID)
 	if err != nil {
 		if isWorkspaceNotFound(err) {
@@ -164,6 +199,48 @@ func (b *Bridge) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "cluster": b.ClusterName, "version": version, "build": build})
+}
+
+func (b *Bridge) handleGetOperation(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	b.mu.RLock()
+	op, ok := b.operations[id]
+	b.mu.RUnlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("operation %q not found", id))
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
+}
+
+func (b *Bridge) handleListWorkspaceOperations(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+	b.mu.RLock()
+	var ops []*Operation
+	for _, op := range b.operations {
+		if op.WorkspaceID == workspaceID {
+			ops = append(ops, op)
+		}
+	}
+	b.mu.RUnlock()
+	sort.Slice(ops, func(i, j int) bool {
+		return ops[i].StartedAt.After(ops[j].StartedAt)
+	})
+	// Apply limit — default 20, max 100, override via ?limit=N.
+	limit := 20
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	if len(ops) > limit {
+		ops = ops[:limit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": ops})
 }
 
 func (b *Bridge) decodeWorkspaceRequest(r *http.Request, workspaceID string) (WorkspaceSpec, error) {

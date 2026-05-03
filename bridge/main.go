@@ -43,6 +43,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go bridge.StartSyncLoop(ctx)
+	go bridge.startOperationCleanup(ctx)
 	go func() {
 		bridge.Logger.Printf("Starting bridge server on %s", cfg.ListenAddress)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
