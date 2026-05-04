@@ -41,9 +41,11 @@ func (b *Bridge) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if v, ok := b.pendingCreates.Load(workspaceID); ok {
 		if rec := v.(pendingCreate); time.Now().Before(rec.until) {
 			writeJSON(w, http.StatusAccepted, map[string]any{
-				"workspaceId": workspaceID,
-				"status":      "provisioning",
-				"secrets":     map[string]string{"API_SERVER_KEY": rec.apiKey},
+				"workspaceId":  workspaceID,
+				"status":       "provisioning",
+				"url":          workspaceURL(spec),
+				"dashboardUrl": dashboardURL(spec),
+				"secrets":      map[string]string{"API_SERVER_KEY": rec.apiKey},
 			})
 			return
 		}
@@ -70,9 +72,11 @@ func (b *Bridge) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"workspaceId": workspaceID,
-		"status":      "provisioning",
-		"secrets":     map[string]string{"API_SERVER_KEY": apiKey},
+		"workspaceId":  workspaceID,
+		"status":       "provisioning",
+		"url":          workspaceURL(spec),
+		"dashboardUrl": dashboardURL(spec),
+		"secrets":      map[string]string{"API_SERVER_KEY": apiKey},
 	})
 }
 

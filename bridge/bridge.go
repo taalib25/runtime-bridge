@@ -38,6 +38,7 @@ type Bridge struct {
 	HelmConfig     *action.Configuration
 	KubeClient     *kubernetes.Clientset
 	DynamicClient  dynamic.Interface
+	RESTConfig     *rest.Config
 	ClusterName    string
 	KubeconfigPath string
 	ChartPath      string
@@ -82,6 +83,7 @@ func NewBridge(cfg Config) (*Bridge, error) {
 		HelmConfig:     actionConfig,
 		KubeClient:     kubeClient,
 		DynamicClient:  dynamicClient,
+		RESTConfig:     restConfig,
 		ClusterName:    cfg.ClusterName,
 		KubeconfigPath: cfg.KubeconfigPath,
 		ChartPath:      cfg.ChartPath,
@@ -151,6 +153,7 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/workspaces/{id}", b.handleDeleteWorkspace).Methods(http.MethodDelete)
 	v1.HandleFunc("/workspaces/{id}/status", b.handleGetStatus).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{id}/health", b.handleHealth).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/exec", b.handleExec).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{id}/operations", b.handleListWorkspaceOperations).Methods(http.MethodGet)
 	v1.HandleFunc("/operations/{id}", b.handleGetOperation).Methods(http.MethodGet)
 

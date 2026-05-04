@@ -11,12 +11,28 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	helmrelease "helm.sh/helm/v3/pkg/release"
 )
 
 func (b *Bridge) GetWorkspaceStatus(ctx context.Context, workspaceID string) (WorkspaceStatus, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return WorkspaceStatus{}, err
+	}
+	// Release exists but has been soft-deleted (--keep-history). Return a
+	// minimal deleted status so the backend can stop polling and mark it done.
+	if rel.Info != nil && rel.Info.Status == helmrelease.StatusUninstalled {
+		spec, _ := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+		return WorkspaceStatus{
+			WorkspaceID: workspaceID,
+			ClusterID:   b.ClusterName,
+			ReleaseName: rel.Name,
+			Namespace:   rel.Namespace,
+			Phase:       "deleted",
+			CreatedAt:   rel.Info.FirstDeployed.Time.UTC(),
+			LastCheckedAt: time.Now().UTC(),
+			Spec:        spec,
+		}, nil
 	}
 	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
