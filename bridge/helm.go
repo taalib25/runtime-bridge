@@ -503,10 +503,8 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		values["bootstrap"] = map[string]any{"enabled": false}
 
 		// init-dirs creates the two subdirectory roots on the PVC before subPath mounts bind.
-		// copy-hermes-source seeds the hermes-agent Python source that the webui installs
-		// via uv pip at startup. Without it, WebUI starts in reduced functionality mode.
-		// Both init containers mount the PVC root at /mnt (no subPath) so they can create
-		// and populate directories that the main container later mounts with subPath.
+		// Kubernetes requires subPath directories to exist before mounting — this init
+		// container creates them on the raw PVC (no subPath) so subsequent mounts succeed.
 		values["extraInitContainers"] = []any{
 			map[string]any{
 				"name":    "init-dirs",
@@ -514,20 +512,6 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 				"command": []any{"sh", "-c", "mkdir -p /mnt/hermes-home /mnt/workspace"},
 				"volumeMounts": []any{map[string]any{
 					"name": "data", "mountPath": "/mnt",
-				}},
-			},
-			map[string]any{
-				"name":  "copy-hermes-source",
-				"image": "nousresearch/hermes-agent:latest",
-				// Only copy if the source directory is absent or missing pyproject.toml to
-				// avoid re-copying on every pod restart. The copy takes ~2s.
-				"command": []any{"sh", "-c",
-					`if [ ! -f /hermes-home/hermes-agent/pyproject.toml ]; then
-					  cp -a /opt/hermes /hermes-home/hermes-agent
-					fi`,
-				},
-				"volumeMounts": []any{map[string]any{
-					"name": "data", "mountPath": "/hermes-home", "subPath": "hermes-home",
 				}},
 			},
 		}
@@ -733,7 +717,8 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	if strings.TrimSpace(spec.Image) == "" {
 		switch spec.RuntimeMode {
 		case "webui":
-			spec.Image = "ghcr.io/nesquena/hermes-webui"
+			// Pinned digest — verified 2026-05-04. Update when pulling a newer release.
+			spec.Image = "ghcr.io/nesquena/hermes-webui@sha256:4ebc2d228443103294c8460df178f22f0e467efebde270761d66ad4a37b21c35"
 		default:
 			spec.Image = "nousresearch/hermes-agent"
 		}
