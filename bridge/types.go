@@ -54,6 +54,13 @@ type WorkspaceSpec struct {
 	// a second IngressRoute at dash-{ws-id}.{domain}.
 	// WARNING: the dashboard has no built-in auth — set ForwardAuthURL to protect it.
 	DashboardEnabled bool `json:"dashboardEnabled,omitempty"`
+	// RuntimeMode selects the container runtime: "hermes-agent" (default) or "webui".
+	// "webui" deploys ghcr.io/nesquena/hermes-webui — a single-container mode where
+	// the WebUI runs the Hermes agent in-process and serves a browser-based interface.
+	RuntimeMode string `json:"runtimeMode,omitempty"`
+	// RuntimePort is the container port the runtime listens on.
+	// Defaults to 8642 for hermes-agent, 8787 for webui.
+	RuntimePort int `json:"runtimePort,omitempty"`
 }
 
 // ─── Hermes config.yaml ──────────────────────────────────────────────────────

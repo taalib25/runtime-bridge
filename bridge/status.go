@@ -222,7 +222,7 @@ func resolveHealthPath(spec WorkspaceSpec, defaultPath string) string {
 
 // workspaceInternalHealthURL returns the in-cluster Kubernetes service URL for
 // health probing, bypassing Traefik and ForwardAuth entirely.
-// Pattern: http://{serviceName}.{namespace}.svc.cluster.local:8642{healthPath}
+// Pattern: http://{serviceName}.{namespace}.svc.cluster.local:{port}{healthPath}
 // Both service name and namespace equal spec.WorkspaceID by convention.
 func workspaceInternalHealthURL(spec WorkspaceSpec, defaultPath string) string {
 	ns := spec.Namespace
@@ -233,11 +233,15 @@ func workspaceInternalHealthURL(spec WorkspaceSpec, defaultPath string) string {
 	if ns == "" || svc == "" {
 		return ""
 	}
+	port := spec.RuntimePort
+	if port == 0 {
+		port = 8642 // safe fallback for releases created before RuntimePort was introduced
+	}
 	healthPath := resolveHealthPath(spec, defaultPath)
 	if !strings.HasPrefix(healthPath, "/") {
 		healthPath = "/" + healthPath
 	}
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:8642%s", svc, ns, healthPath)
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svc, ns, port, healthPath)
 }
 
 func convertDeploymentConditions(conditions []appsv1.DeploymentCondition) []metav1.Condition {
