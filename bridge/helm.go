@@ -505,6 +505,13 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 	}
 
 	if spec.RuntimeMode == "webui" {
+		// The chart defaults args:["gateway","run"] for hermes-agent. hermes-webui
+		// has its own Python entrypoint — clear both so the image ENTRYPOINT runs
+		// unmodified. The chart template now uses {{- with .Values.args }} so an
+		// empty slice means no args: field is emitted in the pod spec.
+		values["command"] = []any{}
+		values["args"] = []any{}
+
 		// The hermes-webui init script uses sudo for user-switching and writes to /app, /tmp,
 		// /uv_cache at startup. The chart's default security context blocks both.
 		values["podSecurityContext"] = map[string]any{}
@@ -548,6 +555,10 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		// HERMES_WEBUI_STATE_DIR is validated by the init script — it errors if missing.
 		// WANTED_UID/WANTED_GID ensure the container runs as a predictable user on a
 		// fresh PVC (auto-detect probes for host ownership which is root=0 in k8s).
+		// HOME and HERMES_HOME override the chart's hardcoded /opt/data defaults —
+		// hermes-webui expects its data at /home/hermeswebui/.hermes (docker run convention).
+		// .Values.env is rendered after the hardcoded env vars in the template, so
+		// these take effect even though the chart also emits HERMES_HOME/HOME.
 		webuiEnv := map[string]string{
 			"HERMES_WEBUI_HOST":              "0.0.0.0",
 			"HERMES_WEBUI_PORT":              strconv.Itoa(spec.RuntimePort),
@@ -555,6 +566,8 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			"HERMES_WEBUI_DEFAULT_WORKSPACE": "/workspace",
 			"WANTED_UID":                     "1000",
 			"WANTED_GID":                     "1000",
+			"HOME":                           "/home/hermeswebui",
+			"HERMES_HOME":                    "/home/hermeswebui/.hermes",
 		}
 		for k, v := range webuiEnv {
 			if _, exists := spec.EnvMap[k]; !exists {
