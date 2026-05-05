@@ -84,6 +84,7 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 			upgrade.SkipCRDs = true
 			upgrade.Wait = false
 			upgrade.ResetValues = true
+			upgrade.Install = true // handles uninstalled keep-history releases
 			rel, err = upgrade.RunWithContext(ctx, install.ReleaseName, chart, values)
 		}
 		if err != nil {
