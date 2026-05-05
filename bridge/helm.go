@@ -79,13 +79,15 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		// "cannot re-use a name that is still in use". Fall back to upgrade which
 		// handles uninstalled releases cleanly (idempotent re-create).
 		if strings.Contains(err.Error(), "cannot re-use a name that is still in use") {
-			upgrade := action.NewUpgrade(helmCfg)
-			upgrade.Namespace = ns
-			upgrade.SkipCRDs = true
-			upgrade.Wait = false
-			upgrade.ResetValues = true
-			upgrade.Install = true // handles uninstalled keep-history releases
-			rel, err = upgrade.RunWithContext(ctx, install.ReleaseName, chart, values)
+			// --keep-history left an uninstalled release secret. helm upgrade also
+			// rejects it ("has no deployed releases"). Clean up the history secret
+			// so a fresh install can proceed.
+			cleanup := action.NewUninstall(helmCfg)
+			cleanup.KeepHistory = false
+			cleanup.IgnoreNotFound = true
+			cleanup.Wait = false
+			_, _ = cleanup.Run(install.ReleaseName)
+			rel, err = install.RunWithContext(ctx, chart, values)
 		}
 		if err != nil {
 			b.trackOperation("create", "failure", started)
