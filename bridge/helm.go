@@ -75,9 +75,22 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 
 	rel, err := install.RunWithContext(ctx, chart, values)
 	if err != nil {
-		b.trackOperation("create", "failure", started)
-		b.Logger.Printf("[CreateWorkspace] Helm install failed: %v", err)
-		return nil, err
+		// --keep-history on delete leaves an uninstalled release; helm install rejects
+		// "cannot re-use a name that is still in use". Fall back to upgrade which
+		// handles uninstalled releases cleanly (idempotent re-create).
+		if strings.Contains(err.Error(), "cannot re-use a name that is still in use") {
+			upgrade := action.NewUpgrade(helmCfg)
+			upgrade.Namespace = ns
+			upgrade.SkipCRDs = true
+			upgrade.Wait = false
+			upgrade.ResetValues = true
+			rel, err = upgrade.RunWithContext(ctx, install.ReleaseName, chart, values)
+		}
+		if err != nil {
+			b.trackOperation("create", "failure", started)
+			b.Logger.Printf("[CreateWorkspace] Helm install failed: %v", err)
+			return nil, err
+		}
 	}
 
 	if hasCORS || hasAuth {
