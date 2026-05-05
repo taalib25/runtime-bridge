@@ -726,9 +726,11 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	}
 	// Default tag to "latest" only when the caller didn't embed a tag in the image
 	// reference (e.g. "image:v1.2") and didn't set ImageTag explicitly.
+	// Digest references (repo@sha256:...) have no tag — leave ImageTag empty so the
+	// chart template renders the full digest ref without appending ":latest".
 	if strings.TrimSpace(spec.ImageTag) == "" {
 		_, embeddedTag := splitImageReference(spec.Image)
-		if embeddedTag == "" {
+		if embeddedTag == "" && !strings.Contains(spec.Image, "@sha256:") {
 			spec.ImageTag = "latest"
 		}
 	}
