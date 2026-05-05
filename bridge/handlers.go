@@ -51,6 +51,12 @@ func (b *Bridge) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if err := b.checkClusterCapacity(r.Context()); err != nil {
+		b.Logger.Printf("[CreateWorkspace] Capacity check failed for %s: %v", workspaceID, err)
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+
 	// Ensure API_SERVER_KEY is set before the async op so we can return it now.
 	// Backend must store this and pass it back on every future update.
 	if spec.Secrets == nil {

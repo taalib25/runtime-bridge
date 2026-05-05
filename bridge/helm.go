@@ -512,19 +512,34 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		values["command"] = []any{}
 		values["args"] = []any{}
 
-		// The hermes-webui init script starts as root, uses sudo to drop to WANTED_UID,
-		// then writes to /app, /tmp, /uv_cache. The chart defaults (runAsUser:10000,
-		// runAsNonRoot:true, capabilities.drop:ALL) block all of this. Override explicitly
-		// — Helm merges maps, so empty map{} doesn't clear numeric fields.
+		// The hermes-webui image runs as hermeswebuitoo (UID 1025) by default.
+		// hermeswebuitoo_init.bash uses sudo to change hermeswebui's UID to WANTED_UID,
+		// then re-execs as hermeswebui. The chart defaults (runAsUser:10000) must be
+		// overridden — Helm merges maps so an empty map{} doesn't clear numeric fields.
+		// allowPrivilegeEscalation:true is required because the init script uses sudo.
 		values["podSecurityContext"] = map[string]any{
-			"runAsNonRoot": false,
-			"runAsUser":    int64(0),
-			"runAsGroup":   int64(0),
+			"runAsNonRoot":        true,
+			"runAsUser":           int64(1025),
+			"runAsGroup":          int64(1025),
+			"fsGroup":             int64(1025),
+			"fsGroupChangePolicy": "OnRootMismatch",
+			// Helm deep-merges maps — explicitly clear the chart default seccompProfile
+			// so sudo can use unrestricted syscalls inside the container.
+			"seccompProfile": map[string]any{
+				"type": "Unconfined",
+			},
 		}
 		values["securityContext"] = map[string]any{
 			"allowPrivilegeEscalation": true,
 			"readOnlyRootFilesystem":   false,
-			// don't drop capabilities — sudo needs CAP_SETUID/CAP_SETGID to switch users
+			// Helm deep-merges maps so chart defaults (capabilities.drop:ALL, seccompProfile)
+			// must be explicitly overridden. sudo needs CAP_SETUID/SETGID to escalate to root.
+			"capabilities": map[string]any{
+				"drop": []any{}, // clear chart default drop:ALL
+			},
+			"seccompProfile": map[string]any{
+				"type": "Unconfined", // RuntimeDefault can block setresuid; sudo needs unrestricted syscalls
+			},
 		}
 
 		// bootstrap-config uses the main image + copies config.yaml to $mountPath.

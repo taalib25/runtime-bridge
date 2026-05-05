@@ -315,6 +315,54 @@ func (b *Bridge) CheckReadiness(ctx context.Context) error {
 	return nil
 }
 
+// checkClusterCapacity returns an error if the cluster has no nodes able to
+// accept new workloads — all nodes are cordoned, not Ready, or under pressure.
+func (b *Bridge) checkClusterCapacity(ctx context.Context) error {
+	nodes, err := b.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("check cluster capacity: %w", err)
+	}
+	if len(nodes.Items) == 0 {
+		return fmt.Errorf("cluster at capacity: no nodes registered")
+	}
+
+	var issues []string
+	schedulable := 0
+	for _, node := range nodes.Items {
+		if node.Spec.Unschedulable {
+			continue
+		}
+		ready := false
+		for _, c := range node.Status.Conditions {
+			switch c.Type {
+			case corev1.NodeReady:
+				if c.Status == corev1.ConditionTrue {
+					ready = true
+				}
+			case corev1.NodeMemoryPressure:
+				if c.Status == corev1.ConditionTrue {
+					issues = append(issues, fmt.Sprintf("node %s: memory pressure", node.Name))
+				}
+			case corev1.NodeDiskPressure:
+				if c.Status == corev1.ConditionTrue {
+					issues = append(issues, fmt.Sprintf("node %s: disk pressure", node.Name))
+				}
+			}
+		}
+		if ready {
+			schedulable++
+		}
+	}
+
+	if schedulable == 0 {
+		if len(issues) > 0 {
+			return fmt.Errorf("cluster at capacity: %s", strings.Join(issues, "; "))
+		}
+		return fmt.Errorf("cluster at capacity: no ready nodes available")
+	}
+	return nil
+}
+
 func (b *Bridge) getWorkspace(ctx context.Context, workspaceID string) (*Workspace, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {

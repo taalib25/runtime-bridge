@@ -110,6 +110,12 @@ func containerWaitingReason(pod *corev1.Pod) string {
 			return "Init:" + cs.State.Waiting.Reason
 		}
 	}
+	// Pod not yet scheduled — cluster may be full or all nodes are cordoned.
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
+			return "Unschedulable"
+		}
+	}
 	return ""
 }
 
@@ -166,6 +172,8 @@ func derivePhase(status WorkspaceStatus, healthErr error) string {
 		"CreateContainerError", "CreateContainerConfigError":
 		return "error"
 	case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
+		return "error"
+	case "Unschedulable":
 		return "error"
 	}
 	if status.WaitingReason == "OOMKilled" {
