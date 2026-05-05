@@ -720,7 +720,8 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 			// Pinned digest — verified 2026-05-04. Update when pulling a newer release.
 			spec.Image = "ghcr.io/nesquena/hermes-webui@sha256:4ebc2d228443103294c8460df178f22f0e467efebde270761d66ad4a37b21c35"
 		default:
-			spec.Image = "nousresearch/hermes-agent"
+			// Pinned digest — verified 2026-05-05. Update when pulling a newer release.
+			spec.Image = "nousresearch/hermes-agent@sha256:0a22221b696d3c01c69da3c870872d2a4ebc7f6c4c794b7dee59211b561213c1"
 		}
 	}
 	// Default tag to "latest" only when the caller didn't embed a tag in the image

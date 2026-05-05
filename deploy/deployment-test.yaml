@@ -7,6 +7,8 @@ metadata:
     app.kubernetes.io/name: hermes-bridge
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: hermes-bridge
@@ -22,8 +24,8 @@ spec:
       serviceAccountName: hermes-bridge
       containers:
         - name: bridge
-          image: hermes-bridge:latest
-          imagePullPolicy: IfNotPresent
+          image: hermes-bridge:__GIT_SHA__
+          imagePullPolicy: Never
           ports:
             - name: http
               containerPort: 8080
