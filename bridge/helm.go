@@ -512,12 +512,19 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		values["command"] = []any{}
 		values["args"] = []any{}
 
-		// The hermes-webui init script uses sudo for user-switching and writes to /app, /tmp,
-		// /uv_cache at startup. The chart's default security context blocks both.
-		values["podSecurityContext"] = map[string]any{}
+		// The hermes-webui init script starts as root, uses sudo to drop to WANTED_UID,
+		// then writes to /app, /tmp, /uv_cache. The chart defaults (runAsUser:10000,
+		// runAsNonRoot:true, capabilities.drop:ALL) block all of this. Override explicitly
+		// — Helm merges maps, so empty map{} doesn't clear numeric fields.
+		values["podSecurityContext"] = map[string]any{
+			"runAsNonRoot": false,
+			"runAsUser":    int64(0),
+			"runAsGroup":   int64(0),
+		}
 		values["securityContext"] = map[string]any{
 			"allowPrivilegeEscalation": true,
 			"readOnlyRootFilesystem":   false,
+			// don't drop capabilities — sudo needs CAP_SETUID/CAP_SETGID to switch users
 		}
 
 		// bootstrap-config uses the main image + copies config.yaml to $mountPath.
