@@ -106,17 +106,6 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		}
 	}
 
-	if spec.DashboardEnabled {
-		if !hasAuth {
-			b.Logger.Printf("[CreateWorkspace] WARNING: dashboardEnabled=true but ForwardAuthURL not set — dash-%s is publicly accessible", spec.Network.host())
-		}
-		if dHost := dashboardHost(spec); dHost != "" {
-			if err := b.EnsureDashboardIngressRoute(ctx, ns, dHost, ns, hasCORS, hasAuth); err != nil {
-				b.Logger.Printf("[CreateWorkspace] Warning: failed to create dashboard IngressRoute: %v", err)
-			}
-		}
-	}
-
 	b.trackOperation("create", "success", started)
 	b.Logger.Printf("[CreateWorkspace] Created release %s in %s (took %v)", rel.Name, rel.Namespace, time.Since(started))
 	return rel, nil
@@ -262,19 +251,6 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		}
 	}
 
-	if spec.DashboardEnabled {
-		if !hasAuth {
-			b.Logger.Printf("[UpdateWorkspace] WARNING: dashboardEnabled=true but ForwardAuthURL not set — dash-%s is publicly accessible", spec.Network.host())
-		}
-		if dHost := dashboardHost(spec); dHost != "" {
-			if err := b.EnsureDashboardIngressRoute(ctx, ns, dHost, ns, hasCORS, hasAuth); err != nil {
-				b.Logger.Printf("[UpdateWorkspace] Warning: failed to update dashboard IngressRoute: %v", err)
-			}
-		}
-	} else {
-		_ = b.DeleteDashboardIngressRoute(ctx, ns)
-	}
-
 	b.trackOperation("update", "success", started)
 	return rel, nil
 }
@@ -377,17 +353,9 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		},
 		"service": map[string]any{
 			"enabled": true,
-			"ports": func() []any {
-				ports := []any{map[string]any{
-					"name": "api-server", "port": spec.RuntimePort, "targetPort": spec.RuntimePort, "protocol": "TCP",
-				}}
-				if spec.DashboardEnabled {
-					ports = append(ports, map[string]any{
-						"name": "dashboard", "port": int64(9119), "targetPort": int64(9119), "protocol": "TCP",
-					})
-				}
-				return ports
-			}(),
+			"ports": []any{map[string]any{
+				"name": "api-server", "port": spec.RuntimePort, "targetPort": spec.RuntimePort, "protocol": "TCP",
+			}},
 		},
 		"apiServer": map[string]any{
 			"enabled":     true,
@@ -404,29 +372,6 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 
 	if spec.Plan != "" {
 		values["podLabels"] = map[string]any{"hermes.ai/plan": spec.Plan}
-	}
-
-	if spec.DashboardEnabled {
-		// GATEWAY_HEALTH_URL: pod shares network namespace, so 127.0.0.1 reaches the gateway container
-		dashEnv := []any{
-			map[string]any{"name": "GATEWAY_HEALTH_URL", "value": fmt.Sprintf("http://127.0.0.1:%d", spec.RuntimePort)},
-		}
-		for k, v := range spec.EnvMap {
-			dashEnv = append(dashEnv, map[string]any{"name": k, "value": v})
-		}
-		values["extraContainers"] = []any{map[string]any{
-			"name":  "dashboard",
-			"image": repository + ":" + tag,
-			// args (not command) — entrypoint is already `hermes`; args selects the subcommand
-			"args": []any{"dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--insecure"},
-			"ports": []any{map[string]any{
-				"name": "dashboard", "containerPort": int64(9119), "protocol": "TCP",
-			}},
-			"env": dashEnv,
-			"volumeMounts": []any{map[string]any{
-				"name": "data", "mountPath": "/opt/data",
-			}},
-		}}
 	}
 
 	if policy := strings.TrimSpace(spec.ImagePullPolicy); policy != "" {
@@ -504,100 +449,93 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		}
 	}
 
-	if spec.RuntimeMode == "webui" {
-		// The chart defaults args:["gateway","run"] for hermes-agent. hermes-webui
-		// has its own Python entrypoint — clear both so the image ENTRYPOINT runs
-		// unmodified. The chart template now uses {{- with .Values.args }} so an
-		// empty slice means no args: field is emitted in the pod spec.
-		values["command"] = []any{}
-		values["args"] = []any{}
+	// runtime-node-core: clear chart's default hermes-agent args, set UID 1024,
+	// mount PVC root as HERMES_HOME so bootstrap writes config.yaml to the right place.
+	values["command"] = []any{}
+	values["args"] = []any{}
 
-		// The hermes-webui image runs as hermeswebuitoo (UID 1025) by default.
-		// hermeswebuitoo_init.bash uses sudo to change hermeswebui's UID to WANTED_UID,
-		// then re-execs as hermeswebui. The chart defaults (runAsUser:10000) must be
-		// overridden — Helm merges maps so an empty map{} doesn't clear numeric fields.
-		// allowPrivilegeEscalation:true is required because the init script uses sudo.
-		values["podSecurityContext"] = map[string]any{
-			"runAsNonRoot":        true,
-			"runAsUser":           int64(1025),
-			"runAsGroup":          int64(1025),
-			"fsGroup":             int64(1025),
-			"fsGroupChangePolicy": "OnRootMismatch",
-			// Helm deep-merges maps — explicitly clear the chart default seccompProfile
-			// so sudo can use unrestricted syscalls inside the container.
-			"seccompProfile": map[string]any{
-				"type": "Unconfined",
-			},
-		}
-		values["securityContext"] = map[string]any{
-			"allowPrivilegeEscalation": true,
-			"readOnlyRootFilesystem":   false,
-			// Helm deep-merges maps so chart defaults (capabilities.drop:ALL, seccompProfile)
-			// must be explicitly overridden. sudo needs CAP_SETUID/SETGID to escalate to root.
-			"capabilities": map[string]any{
-				"drop": []any{}, // clear chart default drop:ALL
-			},
-			"seccompProfile": map[string]any{
-				"type": "Unconfined", // RuntimeDefault can block setresuid; sudo needs unrestricted syscalls
-			},
-		}
-
-		// bootstrap-config uses the main image + copies config.yaml to $mountPath.
-		// For webui, the hermes home is /home/hermeswebui/.hermes, not /opt/data,
-		// so the standard bootstrap would write to the wrong path. Disable it.
-		values["bootstrap"] = map[string]any{"enabled": false}
-
-		// init-dirs creates the two subdirectory roots on the PVC before subPath mounts bind.
-		// Kubernetes requires subPath directories to exist before mounting — this init
-		// container creates them on the raw PVC (no subPath) so subsequent mounts succeed.
-		values["extraInitContainers"] = []any{
-			map[string]any{
-				"name":    "init-dirs",
-				"image":   "busybox:1.36",
-				"command": []any{"sh", "-c", "mkdir -p /mnt/hermes-home /mnt/workspace"},
-				"volumeMounts": []any{map[string]any{
-					"name": "data", "mountPath": "/mnt",
-				}},
-			},
-		}
-
-		// Mount the two PVC subdirectories at the paths the webui image expects.
-		// The unconditional /opt/data mount (persistence.mountPath) remains in place
-		// and exposes the PVC root — harmless alongside these subPath mounts.
-		values["extraVolumeMounts"] = []any{
-			map[string]any{
-				"name": "data", "mountPath": "/home/hermeswebui/.hermes", "subPath": "hermes-home",
-			},
-			map[string]any{
-				"name": "data", "mountPath": "/workspace", "subPath": "workspace",
-			},
-		}
-
-		// Required env vars for the hermes-webui container.
-		// HERMES_WEBUI_STATE_DIR is validated by the init script — it errors if missing.
-		// WANTED_UID/WANTED_GID ensure the container runs as a predictable user on a
-		// fresh PVC (auto-detect probes for host ownership which is root=0 in k8s).
-		// HOME and HERMES_HOME override the chart's hardcoded /opt/data defaults —
-		// hermes-webui expects its data at /home/hermeswebui/.hermes (docker run convention).
-		// .Values.env is rendered after the hardcoded env vars in the template, so
-		// these take effect even though the chart also emits HERMES_HOME/HOME.
-		webuiEnv := map[string]string{
-			"HERMES_WEBUI_HOST":              "0.0.0.0",
-			"HERMES_WEBUI_PORT":              strconv.Itoa(spec.RuntimePort),
-			"HERMES_WEBUI_STATE_DIR":         "/home/hermeswebui/.hermes/webui",
-			"HERMES_WEBUI_DEFAULT_WORKSPACE": "/workspace",
-			"WANTED_UID":                     "1000",
-			"WANTED_GID":                     "1000",
-			"HOME":                           "/home/hermeswebui",
-			"HERMES_HOME":                    "/home/hermeswebui/.hermes",
-		}
-		for k, v := range webuiEnv {
-			if _, exists := spec.EnvMap[k]; !exists {
-				spec.EnvMap[k] = v
-			}
-		}
-		values["env"] = spec.EnvMap
+	values["podSecurityContext"] = map[string]any{
+		"runAsNonRoot":        true,
+		"runAsUser":           int64(1024),
+		"runAsGroup":          int64(1024),
+		"fsGroup":             int64(1024),
+		"fsGroupChangePolicy": "OnRootMismatch",
 	}
+	values["securityContext"] = map[string]any{
+		"allowPrivilegeEscalation": false,
+		"readOnlyRootFilesystem":   false, // hermes-webui venv writes to /opt/hermes-webui
+		"capabilities": map[string]any{
+			"drop": []any{"ALL"},
+		},
+	}
+
+	// PVC root = HERMES_HOME so the bootstrap-config init container writes
+	// config.yaml directly to /home/hermeswebui/.hermes/config.yaml on the PVC.
+	values["persistence"].(map[string]any)["mountPath"] = "/home/hermeswebui/.hermes"
+
+	// /workspace is a subPath so both dirs share one PVC claim.
+	values["extraVolumeMounts"] = []any{
+		map[string]any{"name": "data", "mountPath": "/workspace", "subPath": "workspace"},
+	}
+
+	// Create the workspace subdir before the subPath mount binds.
+	values["extraInitContainers"] = []any{
+		map[string]any{
+			"name":    "init-dirs",
+			"image":   "busybox:1.36",
+			"command": []any{"sh", "-c", "mkdir -p /mnt/workspace /mnt/webui /mnt/bin /mnt/cache/pip /mnt/cache/npm /mnt/python /mnt/npm /mnt/pnpm"},
+			"volumeMounts": []any{map[string]any{
+				"name": "data", "mountPath": "/mnt",
+			}},
+		},
+	}
+
+	// HOME overrides the chart's "$mountPath/home" default.
+	// HERMES_WEBUI_AGENT_DIR points to the agent baked into the image, not the PVC.
+	h := "/home/hermeswebui/.hermes"
+	rncEnv := map[string]string{
+		"HERMES_WEBUI_HOST":              "0.0.0.0",
+		"HERMES_WEBUI_PORT":              strconv.Itoa(spec.RuntimePort),
+		"HERMES_WEBUI_STATE_DIR":         h + "/webui",
+		"HERMES_WEBUI_DEFAULT_WORKSPACE": "/workspace",
+		"HERMES_WEBUI_AGENT_DIR":         "/opt/hermes-agent",
+		"HOME":                           "/home/hermeswebui",
+		"HERMES_HOME":                    h,
+		"HERMES_SKIP_SETUP":              "1",
+		"HERMES_EXEC_ASK":                "false",
+		"PATH":            h + "/bin:/home/hermeswebui/.local/bin:/opt/hermes-webui/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+		"GH_CONFIG_DIR":   h + "/gh",
+		"XDG_CONFIG_HOME": h + "/.config",
+		"PYTHONUSERBASE":  h + "/python",
+		"PIP_CACHE_DIR":   h + "/cache/pip",
+		"PIPX_HOME":       h + "/pipx",
+		"PIPX_BIN_DIR":    h + "/bin",
+		"UV_CACHE_DIR":    h + "/cache/uv",
+		"UV_TOOL_DIR":     h + "/uv/tools",
+		"UV_TOOL_BIN_DIR": h + "/bin",
+		"NPM_CONFIG_PREFIX": h + "/npm",
+		"NPM_CONFIG_CACHE":  h + "/cache/npm",
+		"PNPM_HOME":         h + "/pnpm",
+		"YARN_GLOBAL_FOLDER": h + "/yarn/global",
+		"YARN_CACHE_FOLDER":  h + "/cache/yarn",
+		"COREPACK_HOME":      h + "/corepack",
+		"BUN_INSTALL":        h + "/bun",
+		"DENO_INSTALL":       h + "/deno",
+		"CARGO_HOME":         h + "/cargo",
+		"RUSTUP_HOME":        h + "/rustup",
+		"GOPATH":             h + "/go",
+		"GOBIN":              h + "/bin",
+		"GEM_HOME":           h + "/gem",
+		"GEM_PATH":           h + "/gem",
+		"COMPOSER_HOME":      h + "/composer",
+		"DOTNET_CLI_HOME":    h + "/dotnet",
+	}
+	for k, v := range rncEnv {
+		if _, exists := spec.EnvMap[k]; !exists {
+			spec.EnvMap[k] = v
+		}
+	}
+	values["env"] = spec.EnvMap
 
 	return values, nil
 }
@@ -655,13 +593,8 @@ func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, 
 	if spec.Namespace == "" {
 		spec.Namespace = namespace
 	}
-	// Fall back to mode-appropriate default when RuntimePort wasn't stored.
 	if spec.RuntimePort == 0 {
-		if spec.RuntimeMode == "webui" {
-			spec.RuntimePort = 8787
-		} else {
-			spec.RuntimePort = 8642
-		}
+		spec.RuntimePort = 8787
 	}
 	return spec, nil
 }
@@ -760,39 +693,19 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	if spec.ClusterID == "" {
 		spec.ClusterID = b.ClusterName
 	}
-	// Normalise runtime mode first — it drives image and port defaults.
-	if spec.RuntimeMode == "" {
-		spec.RuntimeMode = "hermes-agent"
-	}
-	// Default image based on runtime mode.
+	spec.RuntimeMode = "runtime-node-core"
 	if strings.TrimSpace(spec.Image) == "" {
-		switch spec.RuntimeMode {
-		case "webui":
-			// Pinned digest — verified 2026-05-04. Update when pulling a newer release.
-			spec.Image = "ghcr.io/nesquena/hermes-webui@sha256:4ebc2d228443103294c8460df178f22f0e467efebde270761d66ad4a37b21c35"
-		default:
-			// Pinned digest — verified 2026-05-05. Update when pulling a newer release.
-			spec.Image = "nousresearch/hermes-agent@sha256:0a22221b696d3c01c69da3c870872d2a4ebc7f6c4c794b7dee59211b561213c1"
-		}
+		spec.Image = b.Config.RuntimeNodeCoreImage
 	}
-	// Default tag to "latest" only when the caller didn't embed a tag in the image
-	// reference (e.g. "image:v1.2") and didn't set ImageTag explicitly.
-	// Digest references (repo@sha256:...) have no tag — leave ImageTag empty so the
-	// chart template renders the full digest ref without appending ":latest".
+	// Default tag from config when not embedded in the image reference.
 	if strings.TrimSpace(spec.ImageTag) == "" {
 		_, embeddedTag := splitImageReference(spec.Image)
 		if embeddedTag == "" && !strings.Contains(spec.Image, "@sha256:") {
-			spec.ImageTag = "latest"
+			spec.ImageTag = b.Config.RuntimeNodeCoreImageTag
 		}
 	}
-	// Default runtime port based on mode.
 	if spec.RuntimePort == 0 {
-		switch spec.RuntimeMode {
-		case "webui":
-			spec.RuntimePort = 8787
-		default:
-			spec.RuntimePort = 8642
-		}
+		spec.RuntimePort = 8787
 	}
 	// Default namespace to the workspace ID (one namespace per tenant).
 	if spec.Namespace == "" {

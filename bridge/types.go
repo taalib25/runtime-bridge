@@ -50,13 +50,10 @@ type WorkspaceSpec struct {
 	// Plan is the pricing tier: "free", "pro", "enterprise".
 	// Surfaces as pod label hermes.ai/plan for metrics and cost attribution.
 	Plan string `json:"plan,omitempty"`
-	// DashboardEnabled starts a hermes dashboard sidecar (port 9119) and creates
-	// a second IngressRoute at dash-{ws-id}.{domain}.
-	// WARNING: the dashboard has no built-in auth — set ForwardAuthURL to protect it.
-	DashboardEnabled bool `json:"dashboardEnabled,omitempty"`
-	// RuntimeMode selects the container runtime: "hermes-agent" (default) or "webui".
-	// "webui" deploys ghcr.io/nesquena/hermes-webui — a single-container mode where
-	// the WebUI runs the Hermes agent in-process and serves a browser-based interface.
+	// RuntimeMode must be "runtime-node-core" or empty (treated as "runtime-node-core").
+	// Any other value is rejected with a 400. The bridge only supports the prebuilt
+	// runtime-node-core image (ghcr.io/taalib25/runtime-node-core) which bundles
+	// hermes-webui + hermes-agent and runs as hermeswebui (UID 1024).
 	RuntimeMode string `json:"runtimeMode,omitempty"`
 	// RuntimePort is the container port the runtime listens on.
 	// Defaults to 8642 for hermes-agent, 8787 for webui.

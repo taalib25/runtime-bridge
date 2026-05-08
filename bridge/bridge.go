@@ -293,6 +293,7 @@ func (b *Bridge) releaseName(workspaceID string) string {
 	return b.Config.ReleasePrefix + workspaceID
 }
 
+
 func (b *Bridge) workspaceNamespace(spec WorkspaceSpec) string {
 	if strings.TrimSpace(spec.Namespace) != "" {
 		return spec.Namespace
@@ -380,7 +381,7 @@ func (b *Bridge) getWorkspace(ctx context.Context, workspaceID string) (*Workspa
 	return &Workspace{Spec: spec, Status: status}, nil
 }
 
-func (b *Bridge) lookupRelease(ctx context.Context, workspaceID string) (*release.Release, error) {
+func (b *Bridge) lookupRelease(_ context.Context, workspaceID string) (*release.Release, error) {
 	releaseName := b.releaseName(workspaceID)
 	// Workspace releases live in their own namespace — use a per-workspace config.
 	helmCfg, err := newHelmActionConfigForNamespace(b.Config, workspaceID)

@@ -142,7 +142,7 @@ func oomKilled(pod *corev1.Pod) bool {
 func (b *Bridge) checkWorkspaceHealth(ctx context.Context, spec WorkspaceSpec) (bool, int, error) {
 	// Probe the internal Kubernetes service directly so health checks bypass
 	// Traefik ForwardAuth — the pod is healthy even before the auth endpoint exists.
-	url := workspaceInternalHealthURL(spec, b.Config.HealthPath)
+	url := b.workspaceInternalHealthURL(spec, b.Config.HealthPath)
 	if url == "" {
 		return false, 0, fmt.Errorf("workspace URL is not configured")
 	}
@@ -247,13 +247,14 @@ func resolveHealthPath(spec WorkspaceSpec, defaultPath string) string {
 // workspaceInternalHealthURL returns the in-cluster Kubernetes service URL for
 // health probing, bypassing Traefik and ForwardAuth entirely.
 // Pattern: http://{serviceName}.{namespace}.svc.cluster.local:{port}{healthPath}
-// Both service name and namespace equal spec.WorkspaceID by convention.
-func workspaceInternalHealthURL(spec WorkspaceSpec, defaultPath string) string {
+// The service name equals the Helm release name (releaseName = ReleasePrefix + WorkspaceID)
+// because buildValues sets fullnameOverride to that value.
+func (b *Bridge) workspaceInternalHealthURL(spec WorkspaceSpec, defaultPath string) string {
 	ns := spec.Namespace
 	if ns == "" {
 		ns = spec.WorkspaceID
 	}
-	svc := spec.WorkspaceID
+	svc := b.releaseName(spec.WorkspaceID)
 	if ns == "" || svc == "" {
 		return ""
 	}

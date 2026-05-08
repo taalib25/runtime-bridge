@@ -268,6 +268,9 @@ func (b *Bridge) decodeWorkspaceRequest(r *http.Request, workspaceID string) (Wo
 	if strings.TrimSpace(spec.TenantID) == "" {
 		return WorkspaceSpec{}, fmt.Errorf("tenantId is required")
 	}
+	if spec.RuntimeMode != "" && spec.RuntimeMode != "runtime-node-core" {
+		return WorkspaceSpec{}, fmt.Errorf("unsupported runtimeMode %q: only \"runtime-node-core\" is accepted", spec.RuntimeMode)
+	}
 	if spec.Plan != "" {
 		switch spec.Plan {
 		case "free", "pro", "enterprise":
