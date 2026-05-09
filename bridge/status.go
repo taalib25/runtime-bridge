@@ -260,7 +260,7 @@ func (b *Bridge) workspaceInternalHealthURL(spec WorkspaceSpec, defaultPath stri
 	}
 	port := spec.RuntimePort
 	if port == 0 {
-		port = 8642 // safe fallback for releases created before RuntimePort was introduced
+		port = 8787 // safe fallback for releases created before RuntimePort was introduced
 	}
 	healthPath := resolveHealthPath(spec, defaultPath)
 	if !strings.HasPrefix(healthPath, "/") {

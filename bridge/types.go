@@ -56,7 +56,7 @@ type WorkspaceSpec struct {
 	// hermes-webui + hermes-agent and runs as hermeswebui (UID 1024).
 	RuntimeMode string `json:"runtimeMode,omitempty"`
 	// RuntimePort is the container port the runtime listens on.
-	// Defaults to 8642 for hermes-agent, 8787 for webui.
+	// Defaults to 8787 (runtime-node-core listens on 8787).
 	RuntimePort int `json:"runtimePort,omitempty"`
 }
 

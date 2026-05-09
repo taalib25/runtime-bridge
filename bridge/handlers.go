@@ -253,6 +253,97 @@ func (b *Bridge) handleListWorkspaceOperations(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"items": ops})
 }
 
+func (b *Bridge) handleRestartWorkspace(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+	op := b.submitOperation("restart", workspaceID, func(ctx context.Context) error {
+		return b.RestartWorkspace(ctx, workspaceID)
+	})
+	writeJSON(w, http.StatusAccepted, op)
+}
+
+func (b *Bridge) handleRedeployWorkspace(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+	op := b.submitOperation("redeploy", workspaceID, func(ctx context.Context) error {
+		return b.RedeployWorkspace(ctx, workspaceID)
+	})
+	writeJSON(w, http.StatusAccepted, op)
+}
+
+func (b *Bridge) handleRollbackWorkspace(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+	var req struct {
+		Version int `json:"version"`
+	}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck — empty body or missing version defaults to 0 (previous release)
+	}
+	op := b.submitOperation("rollback", workspaceID, func(ctx context.Context) error {
+		return b.RollbackWorkspace(ctx, workspaceID, req.Version)
+	})
+	writeJSON(w, http.StatusAccepted, op)
+}
+
+func (b *Bridge) handleRepairWorkspace(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+	op := b.submitOperation("repair", workspaceID, func(ctx context.Context) error {
+		_, err := b.RepairWorkspace(ctx, workspaceID)
+		return err
+	})
+	writeJSON(w, http.StatusAccepted, op)
+}
+
+func (b *Bridge) handleGetEvents(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+	events, err := b.GetWorkspaceEvents(r.Context(), workspaceID)
+	if err != nil {
+		if isWorkspaceNotFound(err) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workspaceId": workspaceID, "items": events})
+}
+
+func (b *Bridge) handleRecreateTerminal(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validWorkspaceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+	session, err := b.RecreateTerminalSession(r.Context(), workspaceID)
+	if err != nil {
+		if isWorkspaceNotFound(err) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
+}
+
 func (b *Bridge) decodeWorkspaceRequest(r *http.Request, workspaceID string) (WorkspaceSpec, error) {
 	var spec WorkspaceSpec
 	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {

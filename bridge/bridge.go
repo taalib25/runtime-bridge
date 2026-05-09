@@ -154,7 +154,13 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/workspaces/{id}/status", b.handleGetStatus).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{id}/health", b.handleHealth).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{id}/exec", b.handleExec).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/events", b.handleGetEvents).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{id}/operations", b.handleListWorkspaceOperations).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/restart", b.handleRestartWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/redeploy", b.handleRedeployWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/rollback", b.handleRollbackWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/repair", b.handleRepairWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/terminal/recreate", b.handleRecreateTerminal).Methods(http.MethodPost)
 	v1.HandleFunc("/operations/{id}", b.handleGetOperation).Methods(http.MethodGet)
 
 	return b.metricsMiddleware(r)
@@ -218,7 +224,6 @@ func (b *Bridge) updateOperation(id string, mutate func(*Operation)) {
 		mutate(op)
 	}
 }
-
 
 func (b *Bridge) submitOperation(operationType, workspaceID string, fn func(context.Context) error) *Operation {
 	op := &Operation{
@@ -292,7 +297,6 @@ func (b *Bridge) releaseName(workspaceID string) string {
 	}
 	return b.Config.ReleasePrefix + workspaceID
 }
-
 
 func (b *Bridge) workspaceNamespace(spec WorkspaceSpec) string {
 	if strings.TrimSpace(spec.Namespace) != "" {
