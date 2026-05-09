@@ -13,6 +13,12 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
+// version is the semver release. build is the git SHA injected at build time.
+var (
+	version = "v0.1.0"
+	build   = "dev"
+)
+
 func main() {
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -37,6 +43,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go bridge.StartSyncLoop(ctx)
+	go bridge.startOperationCleanup(ctx)
 	go func() {
 		bridge.Logger.Printf("Starting bridge server on %s", cfg.ListenAddress)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

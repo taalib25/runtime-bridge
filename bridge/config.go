@@ -24,20 +24,43 @@ type Config struct {
 	HealthPath        string        `json:"healthPath" yaml:"healthPath"`
 	ReleasePrefix     string        `json:"releasePrefix" yaml:"releasePrefix"`
 	CreateNamespace   bool          `json:"createNamespace" yaml:"createNamespace"`
-	ConfigFile        string        `json:"-" yaml:"-"`
+	// DefaultForwardAuthURL is applied to every workspace that doesn't set forwardAuthURL explicitly.
+	// Set to your backend's /auth/verify endpoint. Leave empty to disable ForwardAuth globally.
+	// Env: BRIDGE_FORWARD_AUTH_URL
+	DefaultForwardAuthURL string `json:"defaultForwardAuthURL" yaml:"defaultForwardAuthURL"`
+	// DefaultCORSOrigins is a comma-separated list of allowed browser origins applied to every
+	// workspace that doesn't set corsOrigins explicitly.
+	// e.g. "https://app.hermeshq.net,http://localhost:3002"
+	// Env: BRIDGE_CORS_ORIGINS
+	DefaultCORSOrigins string `json:"defaultCORSOrigins" yaml:"defaultCORSOrigins"`
+	// DefaultDomain is appended to workspaceID to form the ingress host when network.host is unset.
+	// e.g. "hermeshq.net" → "tenant-abc.hermeshq.net"
+	// Env: BRIDGE_DEFAULT_DOMAIN
+	DefaultDomain string `json:"defaultDomain" yaml:"defaultDomain"`
+
+	// RuntimeNodeCoreImage is the default image repository used when runtimeMode=runtime-node-core
+	// and no explicit image is provided in the workspace spec.
+	// Env: BRIDGE_RUNTIME_NODE_CORE_IMAGE
+	RuntimeNodeCoreImage string `json:"runtimeNodeCoreImage" yaml:"runtimeNodeCoreImage"`
+	// RuntimeNodeCoreImageTag is the default image tag for runtimeMode=runtime-node-core.
+	// Env: BRIDGE_RUNTIME_NODE_CORE_TAG
+	RuntimeNodeCoreImageTag string `json:"runtimeNodeCoreImageTag" yaml:"runtimeNodeCoreImageTag"`
+	ConfigFile string `json:"-" yaml:"-"`
 }
 
 func DefaultConfig() Config {
 	return Config{
-		ListenAddress:     ":8080",
-		Namespace:         "default",
-		SyncInterval:      5 * time.Minute,
-		ShutdownTimeout:   10 * time.Second,
-		HTTPClientTimeout: 5 * time.Second,
-		OperationTimeout:  10 * time.Minute,
-		HealthPath:        "/healthz",
-		ReleasePrefix:     "",
-		CreateNamespace:   false,
+		ListenAddress:           ":8080",
+		Namespace:               "default",
+		SyncInterval:            5 * time.Minute,
+		ShutdownTimeout:         10 * time.Second,
+		HTTPClientTimeout:       5 * time.Second,
+		OperationTimeout:        10 * time.Minute,
+		HealthPath:              "/health",
+		ReleasePrefix:           "",
+		CreateNamespace:         false,
+		RuntimeNodeCoreImage:    "ghcr.io/taalib25/runtime-node-core",
+		RuntimeNodeCoreImageTag: "0.1.0",
 	}
 }
 
@@ -63,6 +86,11 @@ func LoadConfig() (Config, error) {
 	overlayString(&cfg.BridgeSecret, "BRIDGE_SECRET")
 	overlayString(&cfg.HealthPath, "BRIDGE_HEALTH_PATH")
 	overlayString(&cfg.ReleasePrefix, "BRIDGE_RELEASE_PREFIX")
+	overlayString(&cfg.DefaultForwardAuthURL, "BRIDGE_FORWARD_AUTH_URL")
+	overlayString(&cfg.DefaultCORSOrigins, "BRIDGE_CORS_ORIGINS")
+	overlayString(&cfg.DefaultDomain, "BRIDGE_DEFAULT_DOMAIN")
+	overlayString(&cfg.RuntimeNodeCoreImage, "BRIDGE_RUNTIME_NODE_CORE_IMAGE")
+	overlayString(&cfg.RuntimeNodeCoreImageTag, "BRIDGE_RUNTIME_NODE_CORE_TAG")
 
 	if err := overlayDuration(&cfg.SyncInterval, "BRIDGE_SYNC_INTERVAL"); err != nil {
 		return Config{}, err

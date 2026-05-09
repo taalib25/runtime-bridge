@@ -1,0 +1,97 @@
+{{- if not .Values.operator.enabled }}
+{{- if .Values.ingressRoute.enabled }}
+{{- $host := "" }}
+{{- range .Values.ingress.hosts }}
+  {{- if not $host }}{{- $host = .host }}{{- end }}
+{{- end }}
+{{- $svcName := include "hermes-agent.fullname" . }}
+{{- $ns := .Release.Namespace }}
+{{- $apiVer := .Values.ingressRoute.traefikApiVersion }}
+{{- if .Values.ingressRoute.cors.enabled }}
+---
+apiVersion: {{ $apiVer }}
+kind: Middleware
+metadata:
+  name: workspace-cors
+  namespace: {{ $ns }}
+  labels:
+    {{- include "hermes-agent.labels" . | nindent 4 }}
+spec:
+  headers:
+    accessControlAllowOriginList:
+      {{- toYaml .Values.ingressRoute.cors.origins | nindent 6 }}
+    accessControlAllowMethods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - PATCH
+      - OPTIONS
+    accessControlAllowHeaders:
+      {{- toYaml .Values.ingressRoute.cors.allowHeaders | nindent 6 }}
+    accessControlAllowCredentials: true
+    accessControlMaxAge: 86400
+    addVaryHeader: true
+{{- end }}
+{{- if .Values.ingressRoute.forwardAuth.enabled }}
+---
+apiVersion: {{ $apiVer }}
+kind: Middleware
+metadata:
+  name: workspace-auth
+  namespace: {{ $ns }}
+  labels:
+    {{- include "hermes-agent.labels" . | nindent 4 }}
+spec:
+  forwardAuth:
+    address: {{ .Values.ingressRoute.forwardAuth.url | quote }}
+    trustForwardHeader: true
+    authResponseHeaders:
+      - Authorization
+{{- end }}
+---
+apiVersion: {{ $apiVer }}
+kind: IngressRoute
+metadata:
+  name: {{ include "hermes-agent.fullname" . }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "hermes-agent.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    {{- toYaml .Values.ingressRoute.entryPoints | nindent 4 }}
+  routes:
+    {{- if .Values.ingressRoute.cors.enabled }}
+    - kind: Rule
+      match: Host({{ $host | quote }}) && Method("OPTIONS")
+      priority: 100
+      middlewares:
+        - name: workspace-cors
+          namespace: {{ $ns }}
+      services:
+        - name: {{ $svcName }}
+          port: {{ .Values.apiServer.port }}
+    {{- end }}
+    - kind: Rule
+      match: Host({{ $host | quote }})
+      priority: 1
+      {{- if or .Values.ingressRoute.cors.enabled .Values.ingressRoute.forwardAuth.enabled }}
+      middlewares:
+        {{- if .Values.ingressRoute.cors.enabled }}
+        - name: workspace-cors
+          namespace: {{ $ns }}
+        {{- end }}
+        {{- if .Values.ingressRoute.forwardAuth.enabled }}
+        - name: workspace-auth
+          namespace: {{ $ns }}
+        {{- end }}
+      {{- end }}
+      services:
+        - name: {{ $svcName }}
+          port: {{ .Values.apiServer.port }}
+  {{- with .Values.ingressRoute.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

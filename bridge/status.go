@@ -11,12 +11,28 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	helmrelease "helm.sh/helm/v3/pkg/release"
 )
 
 func (b *Bridge) GetWorkspaceStatus(ctx context.Context, workspaceID string) (WorkspaceStatus, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return WorkspaceStatus{}, err
+	}
+	// Release exists but has been soft-deleted (--keep-history). Return a
+	// minimal deleted status so the backend can stop polling and mark it done.
+	if rel.Info != nil && rel.Info.Status == helmrelease.StatusUninstalled {
+		spec, _ := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+		return WorkspaceStatus{
+			WorkspaceID: workspaceID,
+			ClusterID:   b.ClusterName,
+			ReleaseName: rel.Name,
+			Namespace:   rel.Namespace,
+			Phase:       "deleted",
+			CreatedAt:   rel.Info.FirstDeployed.Time.UTC(),
+			LastCheckedAt: time.Now().UTC(),
+			Spec:        spec,
+		}, nil
 	}
 	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
@@ -44,23 +60,27 @@ func (b *Bridge) collectWorkspaceStatus(ctx context.Context, spec WorkspaceSpec,
 		ReleaseName:   releaseName,
 		Namespace:     namespace,
 		URL:           workspaceURL(spec),
+		DashboardURL:  dashboardURL(spec),
 		CreatedAt:     createdAt.UTC(),
 		LastCheckedAt: time.Now().UTC(),
 		Spec:          spec,
 	}
 
-	if len(deployments.Items) > 0 {
-		deployment := selectDeployment(deployments.Items, releaseName)
-		status.Replicas = deployment.Status.Replicas
-		status.ReadyReplicas = deployment.Status.ReadyReplicas
-		status.Conditions = deploymentConditions(convertDeploymentConditions(deployment.Status.Conditions))
-		status.Message = deploymentMessage(deployment)
+	if dep := selectDeployment(deployments.Items, releaseName); dep != nil {
+		status.Replicas = dep.Status.Replicas
+		status.ReadyReplicas = dep.Status.ReadyReplicas
+		status.Conditions = deploymentConditions(convertDeploymentConditions(dep.Status.Conditions))
+		status.Message = deploymentMessage(*dep)
 	}
 
-	if len(pods.Items) > 0 {
-		pod := selectPod(pods.Items)
+	if pod := selectPod(pods.Items); pod != nil {
 		status.PodPhase = string(pod.Status.Phase)
-		if message := podMessage(pod); message != "" {
+		status.WaitingReason = containerWaitingReason(pod)
+		status.RestartCount = podRestartCount(pod)
+		if oomKilled(pod) && status.WaitingReason == "" {
+			status.WaitingReason = "OOMKilled"
+		}
+		if message := podMessage(*pod); message != "" {
 			status.Message = message
 		}
 	}
@@ -75,8 +95,54 @@ func (b *Bridge) collectWorkspaceStatus(ctx context.Context, spec WorkspaceSpec,
 	return status, nil
 }
 
+// containerWaitingReason returns the Waiting.Reason of the first container not
+// yet running. Common values: CrashLoopBackOff, ImagePullBackOff, ErrImagePull,
+// CreateContainerConfigError, CreateContainerError, RunContainerError.
+func containerWaitingReason(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return cs.State.Waiting.Reason
+		}
+	}
+	// Also check init containers — a stuck init container blocks everything.
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return "Init:" + cs.State.Waiting.Reason
+		}
+	}
+	// Pod not yet scheduled — cluster may be full or all nodes are cordoned.
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
+			return "Unschedulable"
+		}
+	}
+	return ""
+}
+
+// podRestartCount returns the total restart count across all containers.
+func podRestartCount(pod *corev1.Pod) int32 {
+	var total int32
+	for _, cs := range pod.Status.ContainerStatuses {
+		total += cs.RestartCount
+	}
+	return total
+}
+
+// oomKilled returns true if any container was last terminated due to OOM.
+func oomKilled(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.LastTerminationState.Terminated != nil &&
+			cs.LastTerminationState.Terminated.Reason == "OOMKilled" {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *Bridge) checkWorkspaceHealth(ctx context.Context, spec WorkspaceSpec) (bool, int, error) {
-	url := workspaceHealthURL(spec, b.Config.HealthPath)
+	// Probe the internal Kubernetes service directly so health checks bypass
+	// Traefik ForwardAuth — the pod is healthy even before the auth endpoint exists.
+	url := b.workspaceInternalHealthURL(spec, b.Config.HealthPath)
 	if url == "" {
 		return false, 0, fmt.Errorf("workspace URL is not configured")
 	}
@@ -94,28 +160,59 @@ func (b *Bridge) checkWorkspaceHealth(ctx context.Context, spec WorkspaceSpec) (
 }
 
 func derivePhase(status WorkspaceStatus, healthErr error) string {
+	// Pod-level hard failure (evicted, node issues, OOM at pod level).
 	if strings.EqualFold(status.PodPhase, string(corev1.PodFailed)) {
 		return "failed"
 	}
+
+	// Container-level error states — pod may be Running or Pending but the
+	// container is definitively broken and needs user intervention.
+	switch status.WaitingReason {
+	case "CrashLoopBackOff", "RunContainerError", "PostStartHookError",
+		"CreateContainerError", "CreateContainerConfigError":
+		return "error"
+	case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
+		return "error"
+	case "Unschedulable":
+		return "error"
+	}
+	if status.WaitingReason == "OOMKilled" {
+		return "error"
+	}
+
+	// Fully healthy.
 	if status.ReadyReplicas > 0 && status.Healthy && healthErr == nil {
-		return "running"
+		return "ready"
 	}
-	if status.Replicas == 0 && status.ReadyReplicas == 0 {
-		return "creating"
+
+	// Pod is Running but app hasn't passed health check yet — still warming up.
+	// Do NOT return "failed" here: health check failure during startup is expected.
+	if strings.EqualFold(status.PodPhase, string(corev1.PodRunning)) {
+		return "starting"
 	}
-	if strings.EqualFold(status.PodPhase, string(corev1.PodPending)) {
-		return "creating"
-	}
-	if healthErr != nil && status.ReadyReplicas == 0 {
-		return "failed"
-	}
-	if status.ReadyReplicas < status.Replicas {
-		return "creating"
-	}
-	if !status.Healthy {
-		return "failed"
-	}
+
+	// Not yet scheduled, waiting for resources, or init containers still running.
 	return "creating"
+}
+
+func dashboardHost(spec WorkspaceSpec) string {
+	host := spec.Network.host()
+	if host == "" {
+		return ""
+	}
+	return "dash-" + host
+}
+
+func dashboardURL(spec WorkspaceSpec) string {
+	h := dashboardHost(spec)
+	if h == "" {
+		return ""
+	}
+	scheme := spec.Network.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	return scheme + "://" + h
 }
 
 func workspaceURL(spec WorkspaceSpec) string {
@@ -134,25 +231,42 @@ func workspaceURL(spec WorkspaceSpec) string {
 	return fmt.Sprintf("%s://%s%s", scheme, host, path)
 }
 
-func workspaceHealthURL(spec WorkspaceSpec, defaultPath string) string {
-	base := workspaceURL(spec)
-	if base == "" {
+func resolveHealthPath(spec WorkspaceSpec, defaultPath string) string {
+	if p := spec.Network.HealthPath; p != "" {
+		return p
+	}
+	if p := spec.HealthCheckPath; p != "" {
+		return p
+	}
+	if defaultPath != "" {
+		return defaultPath
+	}
+	return "/health"
+}
+
+// workspaceInternalHealthURL returns the in-cluster Kubernetes service URL for
+// health probing, bypassing Traefik and ForwardAuth entirely.
+// Pattern: http://{serviceName}.{namespace}.svc.cluster.local:{port}{healthPath}
+// The service name equals the Helm release name (releaseName = ReleasePrefix + WorkspaceID)
+// because buildValues sets fullnameOverride to that value.
+func (b *Bridge) workspaceInternalHealthURL(spec WorkspaceSpec, defaultPath string) string {
+	ns := spec.Namespace
+	if ns == "" {
+		ns = spec.WorkspaceID
+	}
+	svc := b.releaseName(spec.WorkspaceID)
+	if ns == "" || svc == "" {
 		return ""
 	}
-	healthPath := spec.Network.HealthPath
-	if healthPath == "" {
-		healthPath = spec.HealthCheckPath
+	port := spec.RuntimePort
+	if port == 0 {
+		port = 8787 // safe fallback for releases created before RuntimePort was introduced
 	}
-	if healthPath == "" {
-		healthPath = defaultPath
+	healthPath := resolveHealthPath(spec, defaultPath)
+	if !strings.HasPrefix(healthPath, "/") {
+		healthPath = "/" + healthPath
 	}
-	if healthPath == "" {
-		healthPath = "/healthz"
-	}
-	if strings.HasPrefix(healthPath, "/") {
-		return strings.TrimRight(base, "/") + healthPath
-	}
-	return strings.TrimRight(base, "/") + "/" + healthPath
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d%s", svc, ns, port, healthPath)
 }
 
 func convertDeploymentConditions(conditions []appsv1.DeploymentCondition) []metav1.Condition {
@@ -191,20 +305,26 @@ func podMessage(pod corev1.Pod) string {
 	return pod.Status.Message
 }
 
-func selectDeployment(items []appsv1.Deployment, releaseName string) appsv1.Deployment {
-	for _, item := range items {
-		if item.Name == releaseName {
-			return item
+func selectDeployment(items []appsv1.Deployment, releaseName string) *appsv1.Deployment {
+	for i := range items {
+		if items[i].Name == releaseName {
+			return &items[i]
 		}
 	}
-	return items[0]
+	if len(items) > 0 {
+		return &items[0]
+	}
+	return nil
 }
 
-func selectPod(items []corev1.Pod) corev1.Pod {
-	for _, item := range items {
-		if item.Status.Phase == corev1.PodRunning {
-			return item
+func selectPod(items []corev1.Pod) *corev1.Pod {
+	for i := range items {
+		if items[i].Status.Phase == corev1.PodRunning {
+			return &items[i]
 		}
 	}
-	return items[0]
+	if len(items) > 0 {
+		return &items[0]
+	}
+	return nil
 }

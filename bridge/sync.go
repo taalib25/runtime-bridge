@@ -29,6 +29,12 @@ func (b *Bridge) syncWorkspaces(ctx context.Context) {
 
 	now := time.Now().UTC()
 	for _, workspace := range workspaces {
+		health := 0.0
+		if workspace.Healthy {
+			health = 1.0
+		}
+		b.Metrics.WorkspaceHealth.WithLabelValues(b.ClusterName, workspace.WorkspaceID).Set(health)
+
 		if !workspace.Healthy || workspace.Phase == "failed" {
 			b.Logger.Printf("ALERT workspace unhealthy: id=%s phase=%s namespace=%s message=%s", workspace.WorkspaceID, workspace.Phase, workspace.Namespace, workspace.Message)
 			continue

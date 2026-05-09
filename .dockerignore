@@ -9,3 +9,7 @@
 # Re-include Go module files
 !go.mod
 !go.sum
+
+# Re-include Helm chart (baked into image)
+!charts/hermes-agent
+!charts/hermes-agent/**

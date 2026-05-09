@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,8 +21,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/release"
+	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -33,6 +37,8 @@ type Bridge struct {
 	Config         Config
 	HelmConfig     *action.Configuration
 	KubeClient     *kubernetes.Clientset
+	DynamicClient  dynamic.Interface
+	RESTConfig     *rest.Config
 	ClusterName    string
 	KubeconfigPath string
 	ChartPath      string
@@ -40,9 +46,15 @@ type Bridge struct {
 	Logger         *log.Logger
 	Metrics        *Metrics
 
-	ready      atomic.Bool
-	mu         sync.RWMutex
-	operations map[string]*Operation
+	ready          atomic.Bool
+	mu             sync.RWMutex
+	operations     map[string]*Operation
+	pendingCreates sync.Map // workspaceID → pendingCreate; throttles duplicate creates
+}
+
+type pendingCreate struct {
+	apiKey string
+	until  time.Time
 }
 
 func NewBridge(cfg Config) (*Bridge, error) {
@@ -56,6 +68,11 @@ func NewBridge(cfg Config) (*Bridge, error) {
 		return nil, fmt.Errorf("create kubernetes client: %w", err)
 	}
 
+	dynamicClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create dynamic client: %w", err)
+	}
+
 	actionConfig, err := newHelmActionConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("initialize helm action config: %w", err)
@@ -65,6 +82,8 @@ func NewBridge(cfg Config) (*Bridge, error) {
 		Config:         cfg,
 		HelmConfig:     actionConfig,
 		KubeClient:     kubeClient,
+		DynamicClient:  dynamicClient,
+		RESTConfig:     restConfig,
 		ClusterName:    cfg.ClusterName,
 		KubeconfigPath: cfg.KubeconfigPath,
 		ChartPath:      cfg.ChartPath,
@@ -91,8 +110,12 @@ func buildRESTConfig(kubeconfigPath string) (*rest.Config, error) {
 }
 
 func newHelmActionConfig(cfg Config) (*action.Configuration, error) {
+	return newHelmActionConfigForNamespace(cfg, cfg.Namespace)
+}
+
+func newHelmActionConfigForNamespace(cfg Config, namespace string) (*action.Configuration, error) {
 	flags := genericclioptions.NewConfigFlags(true)
-	flags.Namespace = &cfg.Namespace
+	flags.Namespace = &namespace
 	if strings.TrimSpace(cfg.KubeconfigPath) != "" {
 		flags.KubeConfig = &cfg.KubeconfigPath
 	}
@@ -103,12 +126,16 @@ func newHelmActionConfig(cfg Config) (*action.Configuration, error) {
 	}
 
 	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(flags, cfg.Namespace, helmDriver, func(format string, args ...interface{}) {
+	if err := actionConfig.Init(flags, namespace, helmDriver, func(format string, args ...interface{}) {
 		log.Printf("[helm] "+format, args...)
 	}); err != nil {
 		return nil, fmt.Errorf("init helm action config: %w", err)
 	}
 	return actionConfig, nil
+}
+
+func (b *Bridge) helmConfigForNamespace(namespace string) (*action.Configuration, error) {
+	return newHelmActionConfigForNamespace(b.Config, namespace)
 }
 
 func (b *Bridge) Router() http.Handler {
@@ -126,14 +153,52 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/workspaces/{id}", b.handleDeleteWorkspace).Methods(http.MethodDelete)
 	v1.HandleFunc("/workspaces/{id}/status", b.handleGetStatus).Methods(http.MethodGet)
 	v1.HandleFunc("/workspaces/{id}/health", b.handleHealth).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/exec", b.handleExec).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/events", b.handleGetEvents).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/operations", b.handleListWorkspaceOperations).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/restart", b.handleRestartWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/redeploy", b.handleRedeployWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/rollback", b.handleRollbackWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/repair", b.handleRepairWorkspace).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/terminal/recreate", b.handleRecreateTerminal).Methods(http.MethodPost)
+	v1.HandleFunc("/operations/{id}", b.handleGetOperation).Methods(http.MethodGet)
 
-	return r
+	return b.metricsMiddleware(r)
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (b *Bridge) metricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rw, r)
+
+		path := r.URL.Path
+		if route := mux.CurrentRoute(r); route != nil {
+			if tmpl, err := route.GetPathTemplate(); err == nil {
+				path = tmpl
+			}
+		}
+		code := strconv.Itoa(rw.statusCode)
+		b.Metrics.HTTPRequests.WithLabelValues(r.Method, path, code).Inc()
+		b.Metrics.HTTPDuration.WithLabelValues(r.Method, path).Observe(time.Since(start).Seconds())
+	})
 }
 
 func (b *Bridge) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided := r.Header.Get(sharedSecretHeader)
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(b.Config.BridgeSecret)) != 1 {
+			b.Logger.Printf("[Auth] 401 %s %s — missing or wrong %s (provided len=%d)", r.Method, r.URL.Path, sharedSecretHeader, len(provided))
 			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized"})
 			return
 		}
@@ -158,16 +223,6 @@ func (b *Bridge) updateOperation(id string, mutate func(*Operation)) {
 	if op, ok := b.operations[id]; ok {
 		mutate(op)
 	}
-}
-
-func (b *Bridge) getOperation(id string) *Operation {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if op, ok := b.operations[id]; ok {
-		copy := *op
-		return &copy
-	}
-	return nil
 }
 
 func (b *Bridge) submitOperation(operationType, workspaceID string, fn func(context.Context) error) *Operation {
@@ -207,6 +262,35 @@ func (b *Bridge) submitOperation(operationType, workspaceID string, fn func(cont
 	return op
 }
 
+func (b *Bridge) startOperationCleanup(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			// Evict completed operations older than 1 hour.
+			cutoff := time.Now().Add(-1 * time.Hour)
+			b.mu.Lock()
+			for id, op := range b.operations {
+				if op.CompletedAt != nil && op.CompletedAt.Before(cutoff) {
+					delete(b.operations, id)
+				}
+			}
+			b.mu.Unlock()
+			// Evict expired pendingCreates entries. These are checked on read
+			// but never deleted, causing the map to grow unbounded over time.
+			b.pendingCreates.Range(func(k, v any) bool {
+				if rec := v.(pendingCreate); time.Now().After(rec.until) {
+					b.pendingCreates.Delete(k)
+				}
+				return true
+			})
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (b *Bridge) releaseName(workspaceID string) string {
 	if strings.TrimSpace(b.Config.ReleasePrefix) == "" {
 		return workspaceID
@@ -236,6 +320,54 @@ func (b *Bridge) CheckReadiness(ctx context.Context) error {
 	return nil
 }
 
+// checkClusterCapacity returns an error if the cluster has no nodes able to
+// accept new workloads — all nodes are cordoned, not Ready, or under pressure.
+func (b *Bridge) checkClusterCapacity(ctx context.Context) error {
+	nodes, err := b.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("check cluster capacity: %w", err)
+	}
+	if len(nodes.Items) == 0 {
+		return fmt.Errorf("cluster at capacity: no nodes registered")
+	}
+
+	var issues []string
+	schedulable := 0
+	for _, node := range nodes.Items {
+		if node.Spec.Unschedulable {
+			continue
+		}
+		ready := false
+		for _, c := range node.Status.Conditions {
+			switch c.Type {
+			case corev1.NodeReady:
+				if c.Status == corev1.ConditionTrue {
+					ready = true
+				}
+			case corev1.NodeMemoryPressure:
+				if c.Status == corev1.ConditionTrue {
+					issues = append(issues, fmt.Sprintf("node %s: memory pressure", node.Name))
+				}
+			case corev1.NodeDiskPressure:
+				if c.Status == corev1.ConditionTrue {
+					issues = append(issues, fmt.Sprintf("node %s: disk pressure", node.Name))
+				}
+			}
+		}
+		if ready {
+			schedulable++
+		}
+	}
+
+	if schedulable == 0 {
+		if len(issues) > 0 {
+			return fmt.Errorf("cluster at capacity: %s", strings.Join(issues, "; "))
+		}
+		return fmt.Errorf("cluster at capacity: no ready nodes available")
+	}
+	return nil
+}
+
 func (b *Bridge) getWorkspace(ctx context.Context, workspaceID string) (*Workspace, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
@@ -253,9 +385,14 @@ func (b *Bridge) getWorkspace(ctx context.Context, workspaceID string) (*Workspa
 	return &Workspace{Spec: spec, Status: status}, nil
 }
 
-func (b *Bridge) lookupRelease(ctx context.Context, workspaceID string) (*release.Release, error) {
+func (b *Bridge) lookupRelease(_ context.Context, workspaceID string) (*release.Release, error) {
 	releaseName := b.releaseName(workspaceID)
-	lister := action.NewList(b.HelmConfig)
+	// Workspace releases live in their own namespace — use a per-workspace config.
+	helmCfg, err := newHelmActionConfigForNamespace(b.Config, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("helm config for workspace %s: %w", workspaceID, err)
+	}
+	lister := action.NewList(helmCfg)
 	lister.All = true
 	lister.Filter = fmt.Sprintf("^%s$", releaseName)
 	releases, err := lister.Run()
@@ -268,6 +405,15 @@ func (b *Bridge) lookupRelease(ctx context.Context, workspaceID string) (*releas
 		}
 	}
 	return nil, errWorkspaceNotFound(workspaceID)
+}
+
+func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	_, err := b.KubeClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if k8serrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return err
 }
 
 func errWorkspaceNotFound(workspaceID string) error {

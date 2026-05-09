@@ -1,4 +1,0 @@
-## Append samples of your project ##
-resources:
-- runtime_v1alpha1_runtime.yaml
-# +kubebuilder:scaffold:manifestskustomizesamples

@@ -7,6 +7,8 @@ metadata:
     app.kubernetes.io/name: hermes-bridge
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: hermes-bridge
@@ -14,12 +16,16 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: hermes-bridge
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: hermes-bridge
       containers:
         - name: bridge
-          image: hermes-bridge:latest
-          imagePullPolicy: IfNotPresent
+          image: hermes-bridge:__GIT_SHA__
+          imagePullPolicy: Never
           ports:
             - name: http
               containerPort: 8080
@@ -34,10 +40,18 @@ spec:
               value: "hermes-test"
             - name: BRIDGE_NAMESPACE
               value: "default"
-            - name: CHART_PATH
-              value: /charts/hermes-agent
-            - name: SYNC_INTERVAL
+            - name: BRIDGE_CHART_PATH
+              value: /charts/runtime-node-core
+            - name: BRIDGE_SYNC_INTERVAL
               value: "5m"
+            - name: BRIDGE_FORWARD_AUTH_URL
+              value: "https://api.hermeshq.net/api/client/auth/verify"
+            - name: BRIDGE_CORS_ORIGINS
+              value: "https://hermes-hut-client.vercel.app,http://localhost:3000,http://localhost:3001,http://localhost:3002"
+            - name: BRIDGE_DEFAULT_DOMAIN
+              value: "hermeshq.net"
+            - name: BRIDGE_HEALTH_PATH
+              value: "/health"
           resources:
             requests:
               cpu: 100m
@@ -45,10 +59,6 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
-          volumeMounts:
-            - name: charts
-              mountPath: /charts
-              readOnly: true
           livenessProbe:
             httpGet:
               path: /healthz
@@ -61,8 +71,4 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
-      volumes:
-        - name: charts
-          configMap:
-            name: hermes-agent-chart
       terminationGracePeriodSeconds: 30
