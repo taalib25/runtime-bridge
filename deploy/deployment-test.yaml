@@ -41,7 +41,7 @@ spec:
             - name: BRIDGE_NAMESPACE
               value: "default"
             - name: BRIDGE_CHART_PATH
-              value: /charts/hermes-agent
+              value: /charts/runtime-node-core
             - name: BRIDGE_SYNC_INTERVAL
               value: "5m"
             - name: BRIDGE_FORWARD_AUTH_URL
