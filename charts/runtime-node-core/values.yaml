@@ -21,7 +21,7 @@ runtime:
     HERMES_WEBUI_PORT: "8787"
     HERMES_WEBUI_STATE_DIR: "/home/hermeswebui/.hermes/webui"
     HERMES_WEBUI_DEFAULT_WORKSPACE: "/workspace"
-    HERMES_WEBUI_AGENT_DIR: "/home/hermeswebui/.hermes/hermes-agent"
+    HERMES_WEBUI_AGENT_DIR: "/opt/hermes-agent"
     HERMES_HOME: "/home/hermeswebui/.hermes"
     HERMES_SKIP_SETUP: "1"
     HERMES_EXEC_ASK: "false"
