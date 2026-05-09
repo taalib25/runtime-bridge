@@ -729,8 +729,17 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 		spec.Network.Scheme = "https"
 	}
 	// Derive host from workspaceID + default domain when not explicitly set.
+	// host() combines Subdomain + Host, so Host must be just the base domain.
+	// If caller passed a full hostname in Host with no Subdomain, leave it alone.
 	if spec.Network.Host == "" && strings.TrimSpace(b.Config.DefaultDomain) != "" {
-		spec.Network.Host = spec.WorkspaceID + "." + b.Config.DefaultDomain
+		if spec.Network.Subdomain != "" {
+			// Caller set a subdomain — use the bare domain as Host.
+			spec.Network.Host = b.Config.DefaultDomain
+		} else {
+			// No subdomain — default subdomain to workspaceID, Host to domain.
+			spec.Network.Subdomain = spec.WorkspaceID
+			spec.Network.Host = b.Config.DefaultDomain
+		}
 	}
 	// Default ingress to enabled whenever a host is configured.
 	if spec.IngressEnabled == nil && spec.Network.Host != "" {
