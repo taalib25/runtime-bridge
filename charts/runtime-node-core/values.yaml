@@ -1,0 +1,125 @@
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/taalib25/runtime-node-core
+  tag: "0.1.0"
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets:
+  enabled: true
+  name: ghcr-pull-secret
+
+runtime:
+  instanceId: "runtime-test"
+  port: 8787
+  env:
+    HERMES_WEBUI_HOST: "0.0.0.0"
+    HERMES_WEBUI_PORT: "8787"
+    HERMES_WEBUI_STATE_DIR: "/home/hermeswebui/.hermes/webui"
+    HERMES_WEBUI_DEFAULT_WORKSPACE: "/workspace"
+    HERMES_WEBUI_AGENT_DIR: "/home/hermeswebui/.hermes/hermes-agent"
+    HERMES_HOME: "/home/hermeswebui/.hermes"
+    HERMES_SKIP_SETUP: "1"
+    HERMES_EXEC_ASK: "false"
+    HERMES_TIMEZONE: "UTC"
+    HERMES_BASE_URL: "https://opencode.ai/zen/go"
+    PATH: "/home/hermeswebui/.hermes/bin:/home/hermeswebui/.local/bin:/opt/venv/bin:/opt/hermes-webui/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games"
+    GH_CONFIG_DIR: "/home/hermeswebui/.hermes/gh"
+    XDG_CONFIG_HOME: "/home/hermeswebui/.hermes/.config"
+    PYTHONUSERBASE: "/home/hermeswebui/.hermes/python"
+    PIP_CACHE_DIR: "/home/hermeswebui/.hermes/cache/pip"
+    PIPX_HOME: "/home/hermeswebui/.hermes/pipx"
+    PIPX_BIN_DIR: "/home/hermeswebui/.hermes/bin"
+    UV_CACHE_DIR: "/home/hermeswebui/.hermes/cache/uv"
+    UV_TOOL_DIR: "/home/hermeswebui/.hermes/uv/tools"
+    UV_TOOL_BIN_DIR: "/home/hermeswebui/.hermes/bin"
+    NPM_CONFIG_PREFIX: "/home/hermeswebui/.hermes/npm"
+    NPM_CONFIG_CACHE: "/home/hermeswebui/.hermes/cache/npm"
+    PNPM_HOME: "/home/hermeswebui/.hermes/pnpm"
+    YARN_GLOBAL_FOLDER: "/home/hermeswebui/.hermes/yarn/global"
+    YARN_CACHE_FOLDER: "/home/hermeswebui/.hermes/cache/yarn"
+    COREPACK_HOME: "/home/hermeswebui/.hermes/corepack"
+    BUN_INSTALL: "/home/hermeswebui/.hermes/bun"
+    DENO_INSTALL: "/home/hermeswebui/.hermes/deno"
+    CARGO_HOME: "/home/hermeswebui/.hermes/cargo"
+    RUSTUP_HOME: "/home/hermeswebui/.hermes/rustup"
+    GOPATH: "/home/hermeswebui/.hermes/go"
+    GOBIN: "/home/hermeswebui/.hermes/bin"
+    GEM_HOME: "/home/hermeswebui/.hermes/gem"
+    GEM_PATH: "/home/hermeswebui/.hermes/gem"
+    COMPOSER_HOME: "/home/hermeswebui/.hermes/composer"
+    DOTNET_CLI_HOME: "/home/hermeswebui/.hermes/dotnet"
+
+model:
+  defaultModel: "opencode-go/qwen3.6-plus"
+  provider: "opencode-go"
+
+secrets:
+  create: false
+  existingSecret: runtime-node-core-secrets
+  keys:
+    openai: OPENAI_API_KEY
+    anthropic: ANTHROPIC_API_KEY
+    openrouter: OPENROUTER_API_KEY
+    opencode: OPENCODE_GO_API_KEY
+  data:
+    OPENAI_API_KEY: ""
+    ANTHROPIC_API_KEY: ""
+    OPENROUTER_API_KEY: ""
+    OPENCODE_GO_API_KEY: ""
+
+persistence:
+  state:
+    enabled: true
+    existingClaim: ""
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    mountPath: /home/hermeswebui/.hermes
+  workspace:
+    enabled: true
+    existingClaim: ""
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+    size: 20Gi
+    mountPath: /workspace
+
+service:
+  type: ClusterIP
+  port: 8787
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1024
+  runAsGroup: 1024
+  fsGroup: 1024
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+probes:
+  readiness:
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 12
+  liveness:
+    initialDelaySeconds: 120
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 6

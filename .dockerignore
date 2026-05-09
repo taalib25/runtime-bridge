@@ -11,5 +11,5 @@
 !go.sum
 
 # Re-include Helm chart (baked into image)
-!charts/hermes-agent
-!charts/hermes-agent/**
+!charts/runtime-node-core
+!charts/runtime-node-core/**
