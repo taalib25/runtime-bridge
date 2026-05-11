@@ -57,30 +57,18 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
-            - name: OPENAI_API_KEY
+            {{- range $key, $value := .Values.extraEnv }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- range $envName, $secretKey := .Values.extraSecretKeys }}
+            - name: {{ $envName }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "runtime-node-core.secretName" . }}
-                  key: {{ .Values.secrets.keys.openai }}
+                  name: {{ include "runtime-node-core.secretName" $ }}
+                  key: {{ $secretKey }}
                   optional: true
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "runtime-node-core.secretName" . }}
-                  key: {{ .Values.secrets.keys.anthropic }}
-                  optional: true
-            - name: OPENROUTER_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "runtime-node-core.secretName" . }}
-                  key: {{ .Values.secrets.keys.openrouter }}
-                  optional: true
-            - name: OPENCODE_GO_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "runtime-node-core.secretName" . }}
-                  key: {{ .Values.secrets.keys.opencode }}
-                  optional: true
+            {{- end }}
           volumeMounts:
             - name: state
               mountPath: {{ .Values.persistence.state.mountPath }}
