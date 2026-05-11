@@ -1,6 +1,30 @@
-# runtime-node-core Helm Chart
+# runtime-node-core
 
-Deploy, upgrade, and roll back the runtime node image in Kubernetes/K3s.
+> **Canonical runtime chart for bridge-managed workspaces.**
+> The bridge installs and upgrades this chart for every Hermes runtime instance.
+> Add new runtime behavior here. See `charts/README.md` for context.
+
+---
+
+## Bridge Integration
+
+The bridge uses the Helm SDK (not the CLI) to manage this chart. Key values set by the bridge:
+
+| Value | Purpose |
+|-------|---------|
+| `secrets.existingSecret` | Bridge-owned k8s Secret name (`{workspace-id}-secrets`) |
+| `secrets.create: false` | Bridge always owns the Secret — Helm never writes values |
+| `extraSecretKeys` | `ENV_VAR → secret-data-key` pairs rendered as `secretKeyRef` blocks |
+| `extraEnv` | Plain env vars (platform flags, workspace identity, allowlists) |
+| `config.values` | HermesConfig rendered into `HERMES_HOME/config.yaml` |
+| `bootstrap.overwrite` | Whether to overwrite `config.yaml` on pod start |
+
+**Adding a new provider key:** edit `bridge/providers.go` only — no chart change needed.
+**Adding a new integration:** edit `bridge/integrations.go` only — no chart change needed.
+
+---
+
+## Manual Testing (not the production path)
 
 ## Namespace and Secrets
 
