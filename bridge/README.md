@@ -1,15 +1,47 @@
-# Hermes Go Bridge
+# Bridge
 
-A lightweight HTTP service that manages Hermes workspace lifecycles via Helm SDK, replacing the Kubernetes operator approach.
+The bridge is a Go control service that runs inside the K3s cluster in the
+`hermes-bridge` namespace. It manages Hermes runtime instances using the
+Kubernetes API and Helm SDK.
 
-## Overview
+See `docs/ARCHITECTURE.md` for the full architecture and `docs/CODING_AGENT_RULES.md`
+before making changes.
 
-The Go Bridge provides a simpler alternative to the CRD/controller pattern:
+## Responsibilities
 
-- **No CRDs**: Workspaces are managed as Helm releases
-- **No Controller**: Lifecycle logic runs in a sync loop instead of reconcile
-- **Thin HTTP API**: RESTful endpoints for workspace CRUD operations
-- **Helm SDK**: Direct Helm operations for install/upgrade/uninstall
+| Area | Files |
+|------|-------|
+| Runtime lifecycle (create/update/delete) | `helm.go` |
+| Runtime operations (restart/redeploy/rollback/repair) | `lifecycle.go` |
+| Health + status collection | `status.go` |
+| Background sync loop | `sync.go` |
+| Async operations queue | `bridge.go` (`submitOperation`) |
+| Provider API key management | `providers.go`, `handlers_config.go` |
+| Messaging integration secrets/env | `integrations.go`, `handlers_integrations.go` |
+| Agent template storage + apply | `agent_templates.go`, `handlers_agent_templates.go` |
+| Workspace CRUD HTTP handlers | `handlers_workspace.go` |
+| Traefik IngressRoute + middleware | `ingressroute.go` |
+| WebSocket terminal exec (PTY) | `terminal_exec.go` |
+| Auth middleware | `middleware.go` |
+| Prometheus metrics | `metrics.go` |
+| Config loading | `bridge_config.go` |
+| All request/response types | `types.go` |
+
+## Non-Responsibilities
+
+The bridge does **not** own:
+- Billing and subscriptions
+- User authentication (it validates `X-Bridge-Secret` only)
+- Product chat session storage
+- Global cluster provisioning
+- Hetzner server creation (`hetzner-k3s` CLI is used manually)
+
+## Runtime Path
+
+The bridge installs `charts/runtime-node-core/` via Helm SDK for every workspace.
+It never shells out to `kubectl` or `helm` CLI.
+
+## Overview (original)
 
 ## Architecture
 
