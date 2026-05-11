@@ -50,6 +50,12 @@ type Bridge struct {
 	mu             sync.RWMutex
 	operations     map[string]*Operation
 	pendingCreates sync.Map // workspaceID → pendingCreate; throttles duplicate creates
+	execTokens     sync.Map // token(string) → execToken; short-lived WebSocket auth tokens
+}
+
+type execToken struct {
+	workspaceID string
+	expiry      time.Time
 }
 
 type pendingCreate struct {
@@ -163,6 +169,27 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/workspaces/{id}/terminal/recreate", b.handleRecreateTerminal).Methods(http.MethodPost)
 	v1.HandleFunc("/operations/{id}", b.handleGetOperation).Methods(http.MethodGet)
 
+	// Provider config
+	v1.HandleFunc("/workspaces/{id}/config/providers", b.handleGetWorkspaceProviders).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/config/providers", b.handleSetWorkspaceProvider).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/config/providers/{name}", b.handleUpdateWorkspaceProvider).Methods(http.MethodPut)
+	v1.HandleFunc("/workspaces/{id}/config/providers/{name}", b.handleDeleteWorkspaceProvider).Methods(http.MethodDelete)
+	v1.HandleFunc("/workspaces/{id}/config/model", b.handleSetWorkspaceModel).Methods(http.MethodPut)
+
+	// Messaging integrations
+	v1.HandleFunc("/workspaces/{id}/integrations", b.handleGetWorkspaceIntegrations).Methods(http.MethodGet)
+	v1.HandleFunc("/workspaces/{id}/integrations/{platform}", b.handleEnableIntegration).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/integrations/{platform}", b.handleDisableIntegration).Methods(http.MethodDelete)
+
+	// Agent templates
+	v1.HandleFunc("/agents", b.handleListAgentTemplates).Methods(http.MethodGet)
+	v1.HandleFunc("/agents", b.handleCreateAgentTemplate).Methods(http.MethodPost)
+	v1.HandleFunc("/agents/{agentId}", b.handleGetAgentTemplate).Methods(http.MethodGet)
+	v1.HandleFunc("/agents/{agentId}", b.handleUpdateAgentTemplate).Methods(http.MethodPut)
+	v1.HandleFunc("/agents/{agentId}", b.handleDeleteAgentTemplate).Methods(http.MethodDelete)
+	v1.HandleFunc("/workspaces/{id}/agent", b.handleApplyAgentTemplate).Methods(http.MethodPost)
+	v1.HandleFunc("/workspaces/{id}/agent", b.handleGetWorkspaceAgent).Methods(http.MethodGet)
+
 	return b.metricsMiddleware(r)
 }
 
@@ -196,6 +223,19 @@ func (b *Bridge) metricsMiddleware(next http.Handler) http.Handler {
 
 func (b *Bridge) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Short-lived exec tokens are accepted on the WebSocket upgrade path so
+		// browsers can connect without custom headers (WebSocket API doesn't support them).
+		if tok := r.URL.Query().Get("token"); tok != "" {
+			vars := mux.Vars(r)
+			wsID := vars["id"]
+			if b.consumeExecToken(tok, wsID) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			b.Logger.Printf("[Auth] 401 %s %s — invalid or expired exec token", r.Method, r.URL.Path)
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized"})
+			return
+		}
 		provided := r.Header.Get(sharedSecretHeader)
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(b.Config.BridgeSecret)) != 1 {
 			b.Logger.Printf("[Auth] 401 %s %s — missing or wrong %s (provided len=%d)", r.Method, r.URL.Path, sharedSecretHeader, len(provided))
@@ -204,6 +244,29 @@ func (b *Bridge) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// issueExecToken mints a single-use 32-byte random token tied to workspaceID.
+// The token expires after 2 minutes — enough for a browser to open the WebSocket.
+func (b *Bridge) issueExecToken(workspaceID string) (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate exec token: %w", err)
+	}
+	tok := hex.EncodeToString(buf)
+	b.execTokens.Store(tok, execToken{workspaceID: workspaceID, expiry: time.Now().Add(2 * time.Minute)})
+	return tok, nil
+}
+
+// consumeExecToken validates and atomically deletes a token.
+// Returns true only if the token exists, hasn't expired, and matches workspaceID.
+func (b *Bridge) consumeExecToken(tok, workspaceID string) bool {
+	v, ok := b.execTokens.LoadAndDelete(tok)
+	if !ok {
+		return false
+	}
+	et := v.(execToken)
+	return et.workspaceID == workspaceID && time.Now().Before(et.expiry)
 }
 
 func (b *Bridge) trackOperation(operation, result string, started time.Time) {
@@ -282,6 +345,14 @@ func (b *Bridge) startOperationCleanup(ctx context.Context) {
 			b.pendingCreates.Range(func(k, v any) bool {
 				if rec := v.(pendingCreate); time.Now().After(rec.until) {
 					b.pendingCreates.Delete(k)
+				}
+				return true
+			})
+			// Evict expired exec tokens (normally consumed on first use, but
+			// clean up any that were never redeemed).
+			b.execTokens.Range(func(k, v any) bool {
+				if et := v.(execToken); time.Now().After(et.expiry) {
+					b.execTokens.Delete(k)
 				}
 				return true
 			})

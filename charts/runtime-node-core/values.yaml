@@ -71,6 +71,16 @@ secrets:
     ANTHROPIC_API_KEY: ""
     OPENROUTER_API_KEY: ""
     OPENCODE_GO_API_KEY: ""
+  # (extraKeys is reserved for future chart-managed extras)
+
+# Extra plain env vars injected into the container alongside runtime.env.
+# Used by the bridge for workspace identity (WORKSPACE_ID, TENANT_ID) and
+# messaging platform configuration (TELEGRAM_ALLOWED_USERS, WHATSAPP_ENABLED, etc.)
+extraEnv: {}
+
+# Extra secret-backed env vars: map of ENV_VAR_NAME -> secret-data-key.
+# Keys must exist in the workspace k8s Secret (managed directly by the bridge).
+extraSecretKeys: {}
 
 persistence:
   state:

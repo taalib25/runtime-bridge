@@ -339,11 +339,15 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		"config": map[string]any{
 			"values": hermesConfigToMap(spec.HermesConfig),
 		},
-		// env is the chart's flat map of platform env vars (GATEWAY_ALLOW_ALL_USERS, etc.)
-		// extraEnv is for arbitrary additional env vars as a list.
-		"env":      spec.EnvMap,
-		"extraEnv": envValues(spec.Env),
-		"secrets":  buildSecrets(spec.Secrets),
+		// extraEnv is the chart's flat map of extra env vars (platform flags, workspace
+		// identity, messaging allowlists, etc.) rendered alongside runtime.env defaults.
+		// extraEnvList is for structured {name,value} env pairs from spec.Env (unused by
+		// runtime-node-core chart but preserved for forward compatibility).
+		"env":              spec.EnvMap,
+		"extraEnv":         spec.EnvMap,
+		"extraEnvList":     envValues(spec.Env),
+		"extraSecretKeys":  buildExtraSecretKeys(spec.Secrets),
+		"secrets":          buildSecrets(spec.Secrets),
 		"resources": map[string]any{
 			"requests": map[string]any{},
 			"limits":   map[string]any{},
@@ -605,6 +609,26 @@ func (b *Bridge) getWorkspaceStatusFromRelease(ctx context.Context, rel *release
 		return WorkspaceStatus{}, err
 	}
 	return status, nil
+}
+
+// knownChartSecretKeys are already rendered by hard-coded secretKeyRef blocks in the chart.
+// Any key not in this set is exposed via the chart's extraSecretKeys mechanism.
+var knownChartSecretKeys = map[string]bool{
+	"OPENAI_API_KEY": true, "ANTHROPIC_API_KEY": true,
+	"OPENROUTER_API_KEY": true, "OPENCODE_GO_API_KEY": true,
+	"API_SERVER_KEY": true,
+}
+
+// buildExtraSecretKeys returns env var → secret-data-key pairs for provider API keys
+// that are not already rendered by the chart's hard-coded secretKeyRef blocks.
+func buildExtraSecretKeys(provided map[string]string) map[string]string {
+	extra := map[string]string{}
+	for k := range provided {
+		if !knownChartSecretKeys[k] {
+			extra[k] = k
+		}
+	}
+	return extra
 }
 
 // buildSecrets converts the spec's string secrets map to the any-typed map Helm values expect.

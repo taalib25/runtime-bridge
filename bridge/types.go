@@ -333,3 +333,106 @@ type ErrorResponse struct {
 	Details     string `json:"details,omitempty"`
 	OperationID string `json:"operationId,omitempty"`
 }
+
+// ─── Provider config types ────────────────────────────────────────────────────
+
+// ProviderConfigRequest sets an LLM provider's API key for a workspace.
+type ProviderConfigRequest struct {
+	Provider string `json:"provider"`
+	APIKey   string `json:"apiKey"`
+}
+
+// SetModelRequest updates the active model, provider, and optional base URL.
+type SetModelRequest struct {
+	Provider string `json:"provider"`          // openrouter, anthropic, gemini, opencode-go, custom
+	Model    string `json:"model"`             // e.g. "anthropic/claude-sonnet-4-6"
+	BaseURL  string `json:"baseUrl,omitempty"` // required for "custom" provider
+}
+
+// ProviderInfo describes one configured LLM provider for a workspace.
+type ProviderInfo struct {
+	Provider  string `json:"provider"`
+	APIKeySet bool   `json:"apiKeySet"` // true if key exists; the key itself is never returned
+	Active    bool   `json:"active"`    // whether this is the currently active provider
+}
+
+// ─── Integration types ────────────────────────────────────────────────────────
+
+// IntegrationStatus describes one messaging platform's status for a workspace.
+type IntegrationStatus struct {
+	Platform string `json:"platform"`
+	Enabled  bool   `json:"enabled"`
+	// Status is "active", "needs_pairing" (WhatsApp QR not yet scanned), or "disabled".
+	Status string `json:"status"`
+}
+
+// TelegramIntegrationRequest enables the Telegram messaging integration.
+type TelegramIntegrationRequest struct {
+	BotToken          string `json:"botToken"`
+	WebhookSecret     string `json:"webhookSecret,omitempty"` // required when webhookUrl is set
+	AllowedUsers      string `json:"allowedUsers,omitempty"`
+	GroupAllowedUsers string `json:"groupAllowedUsers,omitempty"`
+	GroupAllowedChats string `json:"groupAllowedChats,omitempty"`
+	HomeChannel       string `json:"homeChannel,omitempty"`
+	WebhookURL        string `json:"webhookUrl,omitempty"`
+	WebhookPort       string `json:"webhookPort,omitempty"`
+}
+
+// DiscordIntegrationRequest enables the Discord messaging integration.
+// AllowedUsers or AllowedRoles must be set; otherwise all messages are denied.
+type DiscordIntegrationRequest struct {
+	BotToken             string `json:"botToken"`
+	AllowedUsers         string `json:"allowedUsers,omitempty"`
+	AllowedRoles         string `json:"allowedRoles,omitempty"`
+	AllowedChannels      string `json:"allowedChannels,omitempty"`
+	HomeChannel          string `json:"homeChannel,omitempty"`
+	RequireMention       string `json:"requireMention,omitempty"`
+	FreeResponseChannels string `json:"freeResponseChannels,omitempty"`
+}
+
+// SlackIntegrationRequest enables the Slack messaging integration.
+// AppToken is required for Socket Mode; AllowedUsers should be set.
+type SlackIntegrationRequest struct {
+	BotToken     string `json:"botToken"`
+	AppToken     string `json:"appToken"`
+	AllowedUsers string `json:"allowedUsers,omitempty"`
+	HomeChannel  string `json:"homeChannel,omitempty"`
+}
+
+// WhatsAppIntegrationRequest enables the WhatsApp integration (Baileys-based).
+// After enabling, admin must exec into the pod and run `hermes whatsapp` to pair via QR.
+type WhatsAppIntegrationRequest struct {
+	AllowedUsers  string `json:"allowedUsers,omitempty"`
+	AllowAllUsers bool   `json:"allowAllUsers,omitempty"`
+	Mode          string `json:"mode,omitempty"` // defaults to "baileys"
+}
+
+// SignalIntegrationRequest enables the Signal messaging integration.
+type SignalIntegrationRequest struct {
+	HTTPURL           string `json:"httpUrl"`
+	Account           string `json:"account"`
+	AllowedUsers      string `json:"allowedUsers,omitempty"`
+	GroupAllowedUsers string `json:"groupAllowedUsers,omitempty"`
+	AllowAllUsers     bool   `json:"allowAllUsers,omitempty"`
+}
+
+// ─── Agent template types ─────────────────────────────────────────────────────
+
+// AgentTemplate is a named snapshot of agent config + SOUL.md content that can
+// be applied to any workspace. Stored as a k8s ConfigMap in the bridge namespace.
+// Not to be confused with native Hermes profiles (separate HERMES_HOME dirs).
+type AgentTemplate struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Description string       `json:"description,omitempty"`
+	// Soul is the content of SOUL.md — the agent's personality/system prompt.
+	Soul        string       `json:"soul,omitempty"`
+	Config      HermesConfig `json:"config,omitempty"`
+	CreatedAt   time.Time    `json:"createdAt"`
+	UpdatedAt   time.Time    `json:"updatedAt"`
+}
+
+// ApplyAgentTemplateRequest applies a named template to a workspace.
+type ApplyAgentTemplateRequest struct {
+	AgentID string `json:"agentId"`
+}
