@@ -14,8 +14,8 @@ var platformSecretKeys = map[string][]string{
 	"telegram":    {"TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"},
 	"discord":     {"DISCORD_BOT_TOKEN"},
 	"slack":       {"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"},
-	"signal":      {"SIGNAL_HTTP_URL", "SIGNAL_ACCOUNT"},
-	"whatsapp":    {}, // no secrets — session is QR-based, stored on PVC
+	"signal":      {"SIGNAL_BOT_TOKEN"}, // only the daemon token is secret; httpUrl+account go in env
+	"whatsapp":    {},                   // no secrets — session is QR-based, stored on PVC
 	"dingtalk":    {"DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET"},
 	"feishu":      {"FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_ENCRYPT_KEY", "FEISHU_VERIFICATION_TOKEN"},
 	"wecom":       {"WECOM_BOT_ID", "WECOM_SECRET"},
@@ -37,6 +37,7 @@ var platformEnvKeys = map[string][]string{
 	"slack":    {"SLACK_ALLOWED_USERS", "SLACK_HOME_CHANNEL", "SLACK_HOME_CHANNEL_NAME"},
 	"whatsapp": {"WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS", "WHATSAPP_ALLOW_ALL_USERS"},
 	"signal": {
+		"SIGNAL_HTTP_URL", "SIGNAL_ACCOUNT", // connection details (non-secret)
 		"SIGNAL_ALLOWED_USERS", "SIGNAL_GROUP_ALLOWED_USERS",
 		"SIGNAL_HOME_CHANNEL_NAME", "SIGNAL_ALLOW_ALL_USERS", "SIGNAL_IGNORE_STORIES",
 	},
@@ -80,19 +81,22 @@ func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform st
 		}
 	}
 
-	// Reconstruct spec and merge existing + new env vars.
+	// Reconstruct spec; workspaceSpecFromRelease restores spec.Secrets via secretKeysFromRelease.
 	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
 	envMap := envMapFromRelease(rel.Config)
-	// Add/update platform-specific env vars from the request.
 	for _, key := range platformEnvKeys[platform] {
 		if v, ok := cfg[key]; ok && v != "" {
 			envMap[key] = v
 		}
 	}
 	spec.EnvMap = envMap
+	// Register platform secret keys so the Deployment gets secretKeyRef entries.
+	for _, key := range platformSecretKeys[platform] {
+		spec.Secrets[key] = ""
+	}
 	spec.OverwriteConfig = false
 
 	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
@@ -116,7 +120,7 @@ func (b *Bridge) DisableIntegration(ctx context.Context, workspaceID, platform s
 	releaseName := rel.Name
 	secretName := b.workspaceSecretName(workspaceID)
 
-	// Remove platform secret keys.
+	// Remove platform secret keys from bridge-owned Secret.
 	secret, err := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return fmt.Errorf("get workspace secret: %w", err)
@@ -130,7 +134,7 @@ func (b *Bridge) DisableIntegration(ctx context.Context, workspaceID, platform s
 		}
 	}
 
-	// Reconstruct spec and remove platform env vars.
+	// Reconstruct spec; spec.Secrets is restored by workspaceSpecFromRelease.
 	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
@@ -140,6 +144,10 @@ func (b *Bridge) DisableIntegration(ctx context.Context, workspaceID, platform s
 		delete(envMap, key)
 	}
 	spec.EnvMap = envMap
+	// Remove platform secret keys from extraSecretKeys so the Deployment drops the refs.
+	for _, key := range platformSecretKeys[platform] {
+		delete(spec.Secrets, key)
+	}
 	spec.OverwriteConfig = false
 
 	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {

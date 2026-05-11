@@ -28,15 +28,17 @@ type WorkspaceEvent struct {
 }
 
 // TerminalSession is metadata the backend uses to proxy WebSocket exec to the right pod.
-// ExecURL is the bridge-internal relative path — callers must not expose the raw
-// Kubernetes exec URL to browsers.
+// Token is a short-lived single-use credential — the browser passes it as ?token= on the
+// WebSocket URL so it can connect without custom headers.
 type TerminalSession struct {
 	WorkspaceID   string `json:"workspaceId"`
 	Namespace     string `json:"namespace"`
 	PodName       string `json:"podName"`
 	ContainerName string `json:"containerName"`
-	// ExecURL is the relative bridge endpoint the backend should proxy.
+	// ExecURL is the bridge WebSocket endpoint; append ?token=Token to connect.
 	ExecURL string `json:"execUrl"`
+	// Token is a 2-minute single-use auth token for the ExecURL WebSocket.
+	Token string `json:"token"`
 }
 
 // RestartWorkspace triggers a rolling restart of the workspace Deployment by
@@ -270,12 +272,18 @@ func (b *Bridge) RecreateTerminalSession(ctx context.Context, workspaceID string
 		break
 	}
 
+	tok, err := b.issueExecToken(workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("issue exec token: %w", err)
+	}
+
 	return &TerminalSession{
 		WorkspaceID:   workspaceID,
 		Namespace:     ns,
 		PodName:       pod.Name,
 		ContainerName: containerName,
 		ExecURL:       fmt.Sprintf("/v1/workspaces/%s/exec", workspaceID),
+		Token:         tok,
 	}, nil
 }
 

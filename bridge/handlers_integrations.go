@@ -160,6 +160,7 @@ func decodeIntegrationRequest(r *http.Request, platform string, cfg map[string]s
 		if req.Account == "" {
 			return fmt.Errorf("account is required for signal")
 		}
+		// httpUrl and account are non-secret connection details → plain env vars.
 		setIfNotEmpty(cfg, "SIGNAL_HTTP_URL", req.HTTPURL)
 		setIfNotEmpty(cfg, "SIGNAL_ACCOUNT", req.Account)
 		setIfNotEmpty(cfg, "SIGNAL_ALLOWED_USERS", req.AllowedUsers)
@@ -168,8 +169,80 @@ func decodeIntegrationRequest(r *http.Request, platform string, cfg map[string]s
 			cfg["SIGNAL_ALLOW_ALL_USERS"] = "true"
 		}
 
+	case "dingtalk":
+		var req DingTalkIntegrationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			return fmt.Errorf("invalid request body: %w", err)
+		}
+		if req.ClientID == "" {
+			return fmt.Errorf("clientId is required for dingtalk")
+		}
+		if req.ClientSecret == "" {
+			return fmt.Errorf("clientSecret is required for dingtalk")
+		}
+		setIfNotEmpty(cfg, "DINGTALK_CLIENT_ID", req.ClientID)
+		setIfNotEmpty(cfg, "DINGTALK_CLIENT_SECRET", req.ClientSecret)
+		setIfNotEmpty(cfg, "DINGTALK_ALLOWED_USERS", req.AllowedUsers)
+
+	case "feishu":
+		var req FeishuIntegrationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			return fmt.Errorf("invalid request body: %w", err)
+		}
+		if req.AppID == "" {
+			return fmt.Errorf("appId is required for feishu")
+		}
+		if req.AppSecret == "" {
+			return fmt.Errorf("appSecret is required for feishu")
+		}
+		setIfNotEmpty(cfg, "FEISHU_APP_ID", req.AppID)
+		setIfNotEmpty(cfg, "FEISHU_APP_SECRET", req.AppSecret)
+		setIfNotEmpty(cfg, "FEISHU_ENCRYPT_KEY", req.EncryptKey)
+		setIfNotEmpty(cfg, "FEISHU_VERIFICATION_TOKEN", req.VerificationToken)
+		setIfNotEmpty(cfg, "FEISHU_DOMAIN", req.Domain)
+		setIfNotEmpty(cfg, "FEISHU_CONNECTION_MODE", req.ConnectionMode)
+		setIfNotEmpty(cfg, "FEISHU_ALLOWED_USERS", req.AllowedUsers)
+		setIfNotEmpty(cfg, "FEISHU_HOME_CHANNEL", req.HomeChannel)
+
+	case "wecom":
+		var req WeComIntegrationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			return fmt.Errorf("invalid request body: %w", err)
+		}
+		if req.BotID == "" {
+			return fmt.Errorf("botId is required for wecom")
+		}
+		if req.Secret == "" {
+			return fmt.Errorf("secret is required for wecom")
+		}
+		setIfNotEmpty(cfg, "WECOM_BOT_ID", req.BotID)
+		setIfNotEmpty(cfg, "WECOM_SECRET", req.Secret)
+		setIfNotEmpty(cfg, "WECOM_WEBSOCKET_URL", req.WebsocketURL)
+		setIfNotEmpty(cfg, "WECOM_ALLOWED_USERS", req.AllowedUsers)
+		setIfNotEmpty(cfg, "WECOM_HOME_CHANNEL", req.HomeChannel)
+
+	case "bluebubbles":
+		var req BlueBubblesIntegrationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			return fmt.Errorf("invalid request body: %w", err)
+		}
+		if req.ServerURL == "" {
+			return fmt.Errorf("serverUrl is required for bluebubbles")
+		}
+		if req.Password == "" {
+			return fmt.Errorf("password is required for bluebubbles")
+		}
+		setIfNotEmpty(cfg, "BLUEBUBBLES_SERVER_URL", req.ServerURL)
+		setIfNotEmpty(cfg, "BLUEBUBBLES_PASSWORD", req.Password)
+		setIfNotEmpty(cfg, "BLUEBUBBLES_WEBHOOK_HOST", req.WebhookHost)
+		setIfNotEmpty(cfg, "BLUEBUBBLES_WEBHOOK_PORT", req.WebhookPort)
+		setIfNotEmpty(cfg, "BLUEBUBBLES_ALLOWED_USERS", req.AllowedUsers)
+		if req.AllowAllUsers {
+			cfg["BLUEBUBBLES_ALLOW_ALL_USERS"] = "true"
+		}
+
 	default:
-		return fmt.Errorf("unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal", platform)
+		return fmt.Errorf("unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, dingtalk, feishu, wecom, bluebubbles", platform)
 	}
 	return nil
 }

@@ -416,6 +416,44 @@ type SignalIntegrationRequest struct {
 	AllowAllUsers     bool   `json:"allowAllUsers,omitempty"`
 }
 
+// DingTalkIntegrationRequest enables the DingTalk messaging integration.
+type DingTalkIntegrationRequest struct {
+	ClientID     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret"`
+	AllowedUsers string `json:"allowedUsers,omitempty"`
+}
+
+// FeishuIntegrationRequest enables the Feishu/Lark messaging integration.
+type FeishuIntegrationRequest struct {
+	AppID               string `json:"appId"`
+	AppSecret           string `json:"appSecret"`
+	EncryptKey          string `json:"encryptKey,omitempty"`          // optional — only needed for encrypted events
+	VerificationToken   string `json:"verificationToken,omitempty"`   // optional — only needed for event verification
+	Domain              string `json:"domain,omitempty"`              // defaults to feishu.cn
+	ConnectionMode      string `json:"connectionMode,omitempty"`      // "webhook" or "websocket"
+	AllowedUsers        string `json:"allowedUsers,omitempty"`
+	HomeChannel         string `json:"homeChannel,omitempty"`
+}
+
+// WeComIntegrationRequest enables the WeCom (企业微信) messaging integration.
+type WeComIntegrationRequest struct {
+	BotID        string `json:"botId"`
+	Secret       string `json:"secret"`
+	WebsocketURL string `json:"websocketUrl,omitempty"`
+	AllowedUsers string `json:"allowedUsers,omitempty"`
+	HomeChannel  string `json:"homeChannel,omitempty"`
+}
+
+// BlueBubblesIntegrationRequest enables the BlueBubbles (iMessage) integration.
+type BlueBubblesIntegrationRequest struct {
+	ServerURL    string `json:"serverUrl"`
+	Password     string `json:"password"`
+	WebhookHost  string `json:"webhookHost,omitempty"`
+	WebhookPort  string `json:"webhookPort,omitempty"`
+	AllowedUsers string `json:"allowedUsers,omitempty"`
+	AllowAllUsers bool  `json:"allowAllUsers,omitempty"`
+}
+
 // ─── Agent template types ─────────────────────────────────────────────────────
 
 // AgentTemplate is a named snapshot of agent config + SOUL.md content that can

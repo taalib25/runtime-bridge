@@ -52,6 +52,30 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		}
 	}
 
+	// Seed the bridge-owned workspace Secret with any values supplied at create time
+	// (e.g. API_SERVER_KEY). The Secret must exist before the Deployment starts so
+	// secretKeyRef env vars resolve correctly.
+	if len(spec.Secrets) > 0 {
+		wsSecret, err := b.getOrCreateWorkspaceSecret(ctx, ns, b.workspaceSecretName(spec.WorkspaceID))
+		if err != nil {
+			b.trackOperation("create", "failure", started)
+			return nil, fmt.Errorf("seed workspace secret: %w", err)
+		}
+		changed := false
+		for k, v := range spec.Secrets {
+			if v != "" {
+				wsSecret.Data[k] = []byte(v)
+				changed = true
+			}
+		}
+		if changed {
+			if _, err := b.KubeClient.CoreV1().Secrets(ns).Update(ctx, wsSecret, metav1.UpdateOptions{}); err != nil {
+				b.trackOperation("create", "failure", started)
+				return nil, fmt.Errorf("seed workspace secret: %w", err)
+			}
+		}
+	}
+
 	install := action.NewInstall(helmCfg)
 	install.ReleaseName = b.releaseName(spec.WorkspaceID)
 	install.Namespace = ns
@@ -343,11 +367,14 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		// identity, messaging allowlists, etc.) rendered alongside runtime.env defaults.
 		// extraEnvList is for structured {name,value} env pairs from spec.Env (unused by
 		// runtime-node-core chart but preserved for forward compatibility).
-		"env":              spec.EnvMap,
-		"extraEnv":         spec.EnvMap,
-		"extraEnvList":     envValues(spec.Env),
-		"extraSecretKeys":  buildExtraSecretKeys(spec.Secrets),
-		"secrets":          buildSecrets(spec.Secrets),
+		"env":             spec.EnvMap,
+		"extraEnv":        spec.EnvMap,
+		"extraEnvList":    envValues(spec.Env),
+		"extraSecretKeys": buildExtraSecretKeys(spec.Secrets),
+		"secrets": map[string]any{
+			"create":         false,
+			"existingSecret": b.workspaceSecretName(spec.WorkspaceID),
+		},
 		"resources": map[string]any{
 			"requests": map[string]any{},
 			"limits":   map[string]any{},
@@ -600,6 +627,9 @@ func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, 
 	if spec.RuntimePort == 0 {
 		spec.RuntimePort = 8787
 	}
+	// Restore secret key names from extraSecretKeys so any UpdateWorkspace caller
+	// preserves existing secretKeyRef entries without explicit secretKeysFromRelease calls.
+	spec.Secrets = secretKeysFromRelease(values)
 	return spec, nil
 }
 
@@ -611,34 +641,14 @@ func (b *Bridge) getWorkspaceStatusFromRelease(ctx context.Context, rel *release
 	return status, nil
 }
 
-// knownChartSecretKeys are already rendered by hard-coded secretKeyRef blocks in the chart.
-// Any key not in this set is exposed via the chart's extraSecretKeys mechanism.
-var knownChartSecretKeys = map[string]bool{
-	"OPENAI_API_KEY": true, "ANTHROPIC_API_KEY": true,
-	"OPENROUTER_API_KEY": true, "OPENCODE_GO_API_KEY": true,
-	"API_SERVER_KEY": true,
-}
-
-// buildExtraSecretKeys returns env var → secret-data-key pairs for provider API keys
-// that are not already rendered by the chart's hard-coded secretKeyRef blocks.
+// buildExtraSecretKeys returns env var → secret-data-key pairs for all keys in the
+// bridge-owned workspace Secret. The chart renders each as a secretKeyRef env var.
 func buildExtraSecretKeys(provided map[string]string) map[string]string {
 	extra := map[string]string{}
 	for k := range provided {
-		if !knownChartSecretKeys[k] {
-			extra[k] = k
-		}
+		extra[k] = k
 	}
 	return extra
-}
-
-// buildSecrets converts the spec's string secrets map to the any-typed map Helm values expect.
-// API_SERVER_KEY must always be present — handler ensures it on create; backend must re-send on update.
-func buildSecrets(provided map[string]string) map[string]any {
-	out := map[string]any{}
-	for k, v := range provided {
-		out[k] = v
-	}
-	return out
 }
 
 func randomHex(n int) string {

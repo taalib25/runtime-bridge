@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -11,15 +12,27 @@ import (
 )
 
 // providerSecretKeys maps provider names to the env var / k8s Secret key they inject.
+// Sourced from the hermes-agent chart's supported provider list.
 var providerSecretKeys = map[string]string{
-	"openrouter":   "OPENROUTER_API_KEY",
-	"openai":       "OPENAI_API_KEY",
-	"anthropic":    "ANTHROPIC_API_KEY",
-	"gemini":       "GOOGLE_API_KEY",
+	// Core western providers
+	"openai":     "OPENAI_API_KEY",
+	"anthropic":  "ANTHROPIC_API_KEY",
+	"openrouter": "OPENROUTER_API_KEY",
+	"gemini":     "GOOGLE_API_KEY",
+	"groq":       "GROQ_API_KEY",
+	"mistral":    "MISTRAL_API_KEY",
+	// Nous Research
+	"nous": "NOUS_API_KEY",
+	// OpenCode inference tiers
 	"opencode-go":  "OPENCODE_GO_API_KEY",
 	"opencode-zen": "OPENCODE_ZEN_API_KEY",
-	"ai-gateway":   "AI_GATEWAY_API_KEY",
-	"deepseek":     "DEEPSEEK_API_KEY",
+	// Chinese / Asia-Pacific providers
+	"glm":        "GLM_API_KEY",
+	"minimax":    "MINIMAX_API_KEY",
+	"kimi":       "KIMI_API_KEY",
+	"huggingface": "HF_TOKEN",
+	// AI gateway / proxy
+	"ai-gateway": "AI_GATEWAY_API_KEY",
 }
 
 // workspaceSecretName returns the k8s Secret name for a workspace's API keys.
@@ -54,7 +67,8 @@ func (b *Bridge) getOrCreateWorkspaceSecret(ctx context.Context, ns, secretName 
 }
 
 // SetWorkspaceProvider stores a provider's API key in the workspace k8s Secret and
-// restarts the workspace so the pod picks up the new env var.
+// performs a Helm upgrade so the Deployment gets the secretKeyRef for the key, then
+// waits for the rolling update to complete.
 func (b *Bridge) SetWorkspaceProvider(ctx context.Context, workspaceID string, req ProviderConfigRequest) error {
 	secretKey, ok := providerSecretKeys[req.Provider]
 	if !ok {
@@ -65,6 +79,7 @@ func (b *Bridge) SetWorkspaceProvider(ctx context.Context, workspaceID string, r
 		return err
 	}
 	ns := rel.Namespace
+	releaseName := rel.Name
 	secretName := b.workspaceSecretName(workspaceID)
 
 	secret, err := b.getOrCreateWorkspaceSecret(ctx, ns, secretName)
@@ -78,8 +93,22 @@ func (b *Bridge) SetWorkspaceProvider(ctx context.Context, workspaceID string, r
 	if _, err := b.KubeClient.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update workspace secret: %w", err)
 	}
+
+	// Helm upgrade: register the key in extraSecretKeys so the Deployment references it.
+	// workspaceSpecFromRelease already restores existing secret keys via secretKeysFromRelease.
+	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	if err != nil {
+		return fmt.Errorf("reconstruct spec: %w", err)
+	}
+	spec.EnvMap = envMapFromRelease(rel.Config)
+	spec.Secrets[secretKey] = "" // value lives in bridge-owned Secret
+	spec.OverwriteConfig = false
+
+	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
+		return err
+	}
 	b.Logger.Printf("[SetWorkspaceProvider] Updated %s key for workspace %s", req.Provider, workspaceID)
-	return b.RestartWorkspace(ctx, workspaceID)
+	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
 // GetWorkspaceProviders lists all providers that have API keys set for the workspace.
@@ -126,7 +155,7 @@ func (b *Bridge) GetWorkspaceProviders(ctx context.Context, workspaceID string) 
 }
 
 // DeleteWorkspaceProvider removes a provider's API key from the workspace k8s Secret
-// and restarts the workspace.
+// and performs a Helm upgrade to remove the secretKeyRef from the Deployment.
 func (b *Bridge) DeleteWorkspaceProvider(ctx context.Context, workspaceID, provider string) error {
 	secretKey, ok := providerSecretKeys[provider]
 	if !ok {
@@ -137,6 +166,7 @@ func (b *Bridge) DeleteWorkspaceProvider(ctx context.Context, workspaceID, provi
 		return err
 	}
 	ns := rel.Namespace
+	releaseName := rel.Name
 	secretName := b.workspaceSecretName(workspaceID)
 
 	secret, err := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
@@ -150,8 +180,21 @@ func (b *Bridge) DeleteWorkspaceProvider(ctx context.Context, workspaceID, provi
 	if _, err := b.KubeClient.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update workspace secret: %w", err)
 	}
+
+	// Helm upgrade: remove the key from extraSecretKeys so the Deployment no longer references it.
+	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	if err != nil {
+		return fmt.Errorf("reconstruct spec: %w", err)
+	}
+	spec.EnvMap = envMapFromRelease(rel.Config)
+	delete(spec.Secrets, secretKey)
+	spec.OverwriteConfig = false
+
+	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
+		return err
+	}
 	b.Logger.Printf("[DeleteWorkspaceProvider] Removed %s key for workspace %s", provider, workspaceID)
-	return b.RestartWorkspace(ctx, workspaceID)
+	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
 // SetWorkspaceModel updates the active model, provider, and optional base URL by
@@ -190,6 +233,28 @@ func providerNames() []string {
 		names = append(names, k)
 	}
 	return names
+}
+
+// secretKeysFromRelease reads the extraSecretKeys map stored in the last Helm release
+// config and returns it as spec.Secrets key names (values are empty — real values live
+// in the bridge-owned k8s Secret). Used to preserve existing secretKeyRef entries on
+// partial spec updates.
+func secretKeysFromRelease(config map[string]any) map[string]string {
+	result := make(map[string]string)
+	raw, ok := config["extraSecretKeys"]
+	if !ok {
+		return result
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return result
+	}
+	for k, v := range m {
+		if s, ok := v.(string); ok {
+			result[k] = s
+		}
+	}
+	return result
 }
 
 // envMapFromRelease extracts the extraEnv flat map from the last Helm release config.

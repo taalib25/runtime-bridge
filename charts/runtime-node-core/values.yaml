@@ -61,17 +61,6 @@ model:
 secrets:
   create: false
   existingSecret: runtime-node-core-secrets
-  keys:
-    openai: OPENAI_API_KEY
-    anthropic: ANTHROPIC_API_KEY
-    openrouter: OPENROUTER_API_KEY
-    opencode: OPENCODE_GO_API_KEY
-  data:
-    OPENAI_API_KEY: ""
-    ANTHROPIC_API_KEY: ""
-    OPENROUTER_API_KEY: ""
-    OPENCODE_GO_API_KEY: ""
-  # (extraKeys is reserved for future chart-managed extras)
 
 # Extra plain env vars injected into the container alongside runtime.env.
 # Used by the bridge for workspace identity (WORKSPACE_ID, TENANT_ID) and
