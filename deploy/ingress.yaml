@@ -5,14 +5,8 @@ metadata:
   namespace: hermes-bridge
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
-    traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
 spec:
   ingressClassName: traefik
-  tls:
-    - hosts:
-        - bridge.hermeshq.net
-      secretName: bridge-tls
   rules:
     - host: bridge.hermeshq.net
       http:
