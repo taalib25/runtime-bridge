@@ -146,8 +146,20 @@ func (b *Bridge) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
+	// purge=true permanently deletes all workspace data including the PVC and
+	// namespace. Requires explicit confirmation header to prevent accidents.
+	purge := r.URL.Query().Get("purge") == "true"
+	if purge {
+		confirm := r.Header.Get("X-Confirm-Data-Deletion")
+		if confirm != workspaceID {
+			writeError(w, http.StatusBadRequest, fmt.Errorf(
+				"purge=true requires header X-Confirm-Data-Deletion: %s — this permanently destroys all workspace data including the PVC", workspaceID,
+			))
+			return
+		}
+	}
 	op := b.submitOperation("delete", workspaceID, func(ctx context.Context) error {
-		return b.DeleteWorkspace(ctx, workspaceID)
+		return b.DeleteWorkspace(ctx, workspaceID, purge)
 	})
 	writeJSON(w, http.StatusAccepted, op)
 }
