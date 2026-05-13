@@ -14,6 +14,7 @@ import (
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/release"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -147,7 +148,15 @@ func (b *Bridge) deleteHelmIngress(ctx context.Context, namespace string) {
 	}
 }
 
-func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error {
+// DeleteWorkspace uninstalls the Helm release for a workspace.
+//
+// purge=false (default): keeps the namespace, PVC, and Helm history as a safe
+// audit record. The workspace is logically deleted but data survives.
+//
+// purge=true: after uninstall, permanently deletes the namespace and everything
+// in it — PVC data, session history, user-installed tools. Irreversible.
+// The handler enforces X-Confirm-Data-Deletion before setting purge=true.
+func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string, purge bool) error {
 	started := time.Now()
 
 	// Write tombstone before uninstalling so the record survives even if
@@ -161,15 +170,9 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 	}
 	uninstall := action.NewUninstall(helmCfg)
 	uninstall.Wait = false
-	// KeepHistory preserves the Helm release secret in the namespace after
-	// uninstall. This allows audit inspection via `helm history` and recovery
-	// via `helm rollback`. The namespace itself is intentionally NOT deleted —
-	// it holds the PVC data and release history as a safe audit record.
-	uninstall.KeepHistory = true
+	uninstall.KeepHistory = !purge
 	_, err = uninstall.Run(b.releaseName(workspaceID))
 	if err != nil {
-		// "already uninstalled" happens when QStash delivers the same delete
-		// message twice — treat as success so QStash marks it delivered.
 		if strings.Contains(err.Error(), "release: not found") ||
 			strings.Contains(err.Error(), "already uninstalled") {
 			b.trackOperation("delete", "success", started)
@@ -193,6 +196,18 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete CORS middleware: %v", mwErr)
 	}
 	b.Metrics.WorkspaceHealth.DeleteLabelValues(b.ClusterName, workspaceID)
+
+	if purge {
+		if err := b.KubeClient.CoreV1().Namespaces().Delete(ctx, workspaceID, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+			b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete namespace %s: %v", workspaceID, err)
+		} else {
+			b.Logger.Printf("[DeleteWorkspace] Purged namespace %s — all data permanently deleted", workspaceID)
+		}
+		b.trackOperation("delete", "success", started)
+		b.Logger.Printf("[DeleteWorkspace] Purged release %s — namespace, PVC, and history destroyed", workspaceID)
+		return nil
+	}
+
 	b.trackOperation("delete", "success", started)
 	b.Logger.Printf("[DeleteWorkspace] Deleted release %s (namespace preserved with tombstone + helm history)", workspaceID)
 	return nil
