@@ -99,10 +99,10 @@ func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform st
 	}
 	spec.OverwriteConfig = false
 
-	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
+	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[EnableIntegration] Enabled %s for workspace %s", platform, workspaceID)
+	b.Logger.Printf("[EnableIntegration] Enabled %s for instance %s", platform, workspaceID)
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
@@ -150,16 +150,16 @@ func (b *Bridge) DisableIntegration(ctx context.Context, workspaceID, platform s
 	}
 	spec.OverwriteConfig = false
 
-	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
+	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[DisableIntegration] Disabled %s for workspace %s", platform, workspaceID)
+	b.Logger.Printf("[DisableIntegration] Disabled %s for instance %s", platform, workspaceID)
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
 // GetWorkspaceIntegrations returns the status of all known messaging platforms
 // for the given workspace. Token values are never returned.
-func (b *Bridge) GetWorkspaceIntegrations(ctx context.Context, workspaceID string) ([]IntegrationStatus, error) {
+func (b *Bridge) GetInstanceIntegrations(ctx context.Context, workspaceID string) ([]IntegrationStatus, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return nil, err

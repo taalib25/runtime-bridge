@@ -14,17 +14,17 @@ import (
 	helmrelease "helm.sh/helm/v3/pkg/release"
 )
 
-func (b *Bridge) GetWorkspaceStatus(ctx context.Context, workspaceID string) (WorkspaceStatus, error) {
+func (b *Bridge) GetInstanceStatus(ctx context.Context, workspaceID string) (InstanceStatus, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
-		return WorkspaceStatus{}, err
+		return InstanceStatus{}, err
 	}
 	// Release exists but has been soft-deleted (--keep-history). Return a
 	// minimal deleted status so the backend can stop polling and mark it done.
 	if rel.Info != nil && rel.Info.Status == helmrelease.StatusUninstalled {
 		spec, _ := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
-		return WorkspaceStatus{
-			WorkspaceID: workspaceID,
+		return InstanceStatus{
+			InstanceID: workspaceID,
 			ClusterID:   b.ClusterName,
 			ReleaseName: rel.Name,
 			Namespace:   rel.Namespace,
@@ -36,30 +36,30 @@ func (b *Bridge) GetWorkspaceStatus(ctx context.Context, workspaceID string) (Wo
 	}
 	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
-		return WorkspaceStatus{}, err
+		return InstanceStatus{}, err
 	}
-	return b.collectWorkspaceStatus(ctx, spec, rel.Name, rel.Info.FirstDeployed.Time)
+	return b.collectInstanceStatus(ctx, spec, rel.Name, rel.Info.FirstDeployed.Time)
 }
 
-func (b *Bridge) collectWorkspaceStatus(ctx context.Context, spec WorkspaceSpec, releaseName string, createdAt time.Time) (WorkspaceStatus, error) {
+func (b *Bridge) collectInstanceStatus(ctx context.Context, spec InstanceSpec, releaseName string, createdAt time.Time) (InstanceStatus, error) {
 	selector := labels.Set{"app.kubernetes.io/instance": releaseName}.AsSelector().String()
 	namespace := b.workspaceNamespace(spec)
 
 	deployments, err := b.KubeClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		return WorkspaceStatus{}, fmt.Errorf("list deployments: %w", err)
+		return InstanceStatus{}, fmt.Errorf("list deployments: %w", err)
 	}
 	pods, err := b.KubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
-		return WorkspaceStatus{}, fmt.Errorf("list pods: %w", err)
+		return InstanceStatus{}, fmt.Errorf("list pods: %w", err)
 	}
 
-	status := WorkspaceStatus{
-		WorkspaceID:   spec.WorkspaceID,
+	status := InstanceStatus{
+		InstanceID:   spec.InstanceID,
 		ClusterID:     spec.ClusterID,
 		ReleaseName:   releaseName,
 		Namespace:     namespace,
-		URL:           workspaceURL(spec),
+		URL:           instanceURL(spec),
 		DashboardURL:  dashboardURL(spec),
 		CreatedAt:     createdAt.UTC(),
 		LastCheckedAt: time.Now().UTC(),
@@ -85,7 +85,7 @@ func (b *Bridge) collectWorkspaceStatus(ctx context.Context, spec WorkspaceSpec,
 		}
 	}
 
-	healthy, code, healthErr := b.checkWorkspaceHealth(ctx, spec)
+	healthy, code, healthErr := b.checkInstanceHealth(ctx, spec)
 	status.Healthy = healthy
 	status.HealthStatusCode = code
 	if healthErr != nil && status.Message == "" {
@@ -139,10 +139,10 @@ func oomKilled(pod *corev1.Pod) bool {
 	return false
 }
 
-func (b *Bridge) checkWorkspaceHealth(ctx context.Context, spec WorkspaceSpec) (bool, int, error) {
+func (b *Bridge) checkInstanceHealth(ctx context.Context, spec InstanceSpec) (bool, int, error) {
 	// Probe the internal Kubernetes service directly so health checks bypass
 	// Traefik ForwardAuth — the pod is healthy even before the auth endpoint exists.
-	url := b.workspaceInternalHealthURL(spec, b.Config.HealthPath)
+	url := b.instanceInternalHealthURL(spec, b.Config.HealthPath)
 	if url == "" {
 		return false, 0, fmt.Errorf("workspace URL is not configured")
 	}
@@ -159,7 +159,7 @@ func (b *Bridge) checkWorkspaceHealth(ctx context.Context, spec WorkspaceSpec) (
 	return resp.StatusCode >= 200 && resp.StatusCode < 300, resp.StatusCode, nil
 }
 
-func derivePhase(status WorkspaceStatus, healthErr error) string {
+func derivePhase(status InstanceStatus, healthErr error) string {
 	// Pod-level hard failure (evicted, node issues, OOM at pod level).
 	if strings.EqualFold(status.PodPhase, string(corev1.PodFailed)) {
 		return "failed"
@@ -195,7 +195,7 @@ func derivePhase(status WorkspaceStatus, healthErr error) string {
 	return "creating"
 }
 
-func dashboardHost(spec WorkspaceSpec) string {
+func dashboardHost(spec InstanceSpec) string {
 	host := spec.Network.host()
 	if host == "" {
 		return ""
@@ -203,7 +203,7 @@ func dashboardHost(spec WorkspaceSpec) string {
 	return "dash-" + host
 }
 
-func dashboardURL(spec WorkspaceSpec) string {
+func dashboardURL(spec InstanceSpec) string {
 	h := dashboardHost(spec)
 	if h == "" {
 		return ""
@@ -215,7 +215,7 @@ func dashboardURL(spec WorkspaceSpec) string {
 	return scheme + "://" + h
 }
 
-func workspaceURL(spec WorkspaceSpec) string {
+func instanceURL(spec InstanceSpec) string {
 	host := spec.Network.host()
 	if strings.TrimSpace(host) == "" {
 		return ""
@@ -231,7 +231,7 @@ func workspaceURL(spec WorkspaceSpec) string {
 	return fmt.Sprintf("%s://%s%s", scheme, host, path)
 }
 
-func resolveHealthPath(spec WorkspaceSpec, defaultPath string) string {
+func resolveHealthPath(spec InstanceSpec, defaultPath string) string {
 	if p := spec.Network.HealthPath; p != "" {
 		return p
 	}
@@ -249,12 +249,12 @@ func resolveHealthPath(spec WorkspaceSpec, defaultPath string) string {
 // Pattern: http://{serviceName}.{namespace}.svc.cluster.local:{port}{healthPath}
 // The service name equals the Helm release name (releaseName = ReleasePrefix + WorkspaceID)
 // because buildValues sets fullnameOverride to that value.
-func (b *Bridge) workspaceInternalHealthURL(spec WorkspaceSpec, defaultPath string) string {
+func (b *Bridge) instanceInternalHealthURL(spec InstanceSpec, defaultPath string) string {
 	ns := spec.Namespace
 	if ns == "" {
-		ns = spec.WorkspaceID
+		ns = spec.InstanceID
 	}
-	svc := b.releaseName(spec.WorkspaceID)
+	svc := b.releaseName(spec.InstanceID)
 	if ns == "" || svc == "" {
 		return ""
 	}

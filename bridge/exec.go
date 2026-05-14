@@ -47,7 +47,7 @@ type execMsg struct {
 //   - Client → server: JSON text frames (execMsg)
 func (b *Bridge) handleExec(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
-	if !validWorkspaceID(workspaceID) {
+	if !validInstanceID(workspaceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId"))
 		return
 	}

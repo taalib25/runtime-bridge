@@ -94,7 +94,7 @@ func (b *Bridge) handleDeleteAgentTemplate(w http.ResponseWriter, r *http.Reques
 // handleApplyAgentTemplate POST /v1/workspaces/{id}/agent
 func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
-	if !validWorkspaceID(workspaceID) {
+	if !validInstanceID(workspaceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
 		return
 	}
@@ -108,7 +108,7 @@ func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := b.ApplyAgentTemplate(r.Context(), workspaceID, req.AgentID); err != nil {
-		if isWorkspaceNotFound(err) || isAgentNotFound(err) {
+		if isInstanceNotFound(err) || isAgentNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
@@ -116,22 +116,22 @@ func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"workspaceId": workspaceID,
+		"instanceId": workspaceID,
 		"agentId":     req.AgentID,
 		"status":      "applied",
 	})
 }
 
-// handleGetWorkspaceAgent GET /v1/workspaces/{id}/agent
-func (b *Bridge) handleGetWorkspaceAgent(w http.ResponseWriter, r *http.Request) {
+// handleGetInstanceAgent GET /v1/workspaces/{id}/agent
+func (b *Bridge) handleGetInstanceAgent(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
-	if !validWorkspaceID(workspaceID) {
+	if !validInstanceID(workspaceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
 		return
 	}
-	tmpl, err := b.GetWorkspaceAgent(r.Context(), workspaceID)
+	tmpl, err := b.GetInstanceAgent(r.Context(), workspaceID)
 	if err != nil {
-		if isWorkspaceNotFound(err) {
+		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}

@@ -15,8 +15,8 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 )
 
-// WorkspaceEvent is a normalized Kubernetes event for a workspace resource.
-type WorkspaceEvent struct {
+// InstanceEvent is a normalized Kubernetes event for a workspace resource.
+type InstanceEvent struct {
 	Type      string    `json:"type"`
 	Reason    string    `json:"reason"`
 	Message   string    `json:"message"`
@@ -31,7 +31,7 @@ type WorkspaceEvent struct {
 // Token is a short-lived single-use credential — the browser passes it as ?token= on the
 // WebSocket URL so it can connect without custom headers.
 type TerminalSession struct {
-	WorkspaceID   string `json:"workspaceId"`
+	InstanceID    string `json:"instanceId"`
 	Namespace     string `json:"namespace"`
 	PodName       string `json:"podName"`
 	ContainerName string `json:"containerName"`
@@ -44,7 +44,7 @@ type TerminalSession struct {
 // RestartWorkspace triggers a rolling restart of the workspace Deployment by
 // patching the pod template annotation (same mechanism as kubectl rollout restart).
 // It then waits for the deployment to become ready and the health probe to pass.
-func (b *Bridge) RestartWorkspace(ctx context.Context, workspaceID string) error {
+func (b *Bridge) RestartInstance(ctx context.Context, workspaceID string) error {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return err
@@ -73,18 +73,18 @@ func (b *Bridge) RestartWorkspace(ctx context.Context, workspaceID string) error
 			return fmt.Errorf("patch deployment %s: %w", dep.Name, patchErr)
 		}
 	}
-	b.Logger.Printf("[RestartWorkspace] Rolling restart triggered for %s (ns=%s)", workspaceID, ns)
+	b.Logger.Printf("[RestartInstance] Rolling restart triggered for %s (ns=%s)", workspaceID, ns)
 
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 5*time.Minute); err != nil {
 		return err
 	}
-	return b.waitForWorkspaceHealth(ctx, workspaceID, 2*time.Minute)
+	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
 }
 
 // RedeployWorkspace re-runs a Helm upgrade using the spec stored in the release config.
 // PVC, namespace, and release name are preserved; only the chart manifests are reapplied.
 // OverwriteConfig is false so the agent's runtime config.yaml is not touched.
-func (b *Bridge) RedeployWorkspace(ctx context.Context, workspaceID string) error {
+func (b *Bridge) RedeployInstance(ctx context.Context, workspaceID string) error {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return err
@@ -95,23 +95,23 @@ func (b *Bridge) RedeployWorkspace(ctx context.Context, workspaceID string) erro
 	}
 	spec.OverwriteConfig = false
 
-	if _, err = b.UpdateWorkspace(ctx, spec); err != nil {
+	if _, err = b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[RedeployWorkspace] Redeployed %s", workspaceID)
+	b.Logger.Printf("[RedeployInstance] Redeployed %s", workspaceID)
 
 	ns := b.workspaceNamespace(spec)
 	releaseName := b.releaseName(workspaceID)
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 5*time.Minute); err != nil {
 		return err
 	}
-	return b.waitForWorkspaceHealth(ctx, workspaceID, 2*time.Minute)
+	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
 }
 
 // RollbackWorkspace rolls the Helm release back to a previous revision.
 // version=0 means the immediately previous release (Helm default).
 // Helm waits for the rollback to complete before returning.
-func (b *Bridge) RollbackWorkspace(ctx context.Context, workspaceID string, version int) error {
+func (b *Bridge) RollbackInstance(ctx context.Context, workspaceID string, version int) error {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return err
@@ -128,15 +128,15 @@ func (b *Bridge) RollbackWorkspace(ctx context.Context, workspaceID string, vers
 	if err := rollback.Run(rel.Name); err != nil {
 		return fmt.Errorf("helm rollback: %w", err)
 	}
-	b.Logger.Printf("[RollbackWorkspace] Rolled back %s to version %d", workspaceID, version)
-	return b.waitForWorkspaceHealth(ctx, workspaceID, 2*time.Minute)
+	b.Logger.Printf("[RollbackInstance] Rolled back %s to version %d", workspaceID, version)
+	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
 }
 
 // RepairWorkspace performs bounded auto-recovery based on the current pod state.
 // Returns the action taken ("restart", "redeploy", or "none") and any error.
 // Image pull failures are returned as errors — retrying would loop indefinitely.
-func (b *Bridge) RepairWorkspace(ctx context.Context, workspaceID string) (string, error) {
-	status, err := b.GetWorkspaceStatus(ctx, workspaceID)
+func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string, error) {
+	status, err := b.GetInstanceStatus(ctx, workspaceID)
 	if err != nil {
 		return "", err
 	}
@@ -146,27 +146,27 @@ func (b *Bridge) RepairWorkspace(ctx context.Context, workspaceID string) (strin
 		return "", fmt.Errorf("image pull failed; check image/tag and imagePullSecret")
 
 	case "CrashLoopBackOff", "RunContainerError":
-		if err := b.RestartWorkspace(ctx, workspaceID); err != nil {
+		if err := b.RestartInstance(ctx, workspaceID); err != nil {
 			return "restart", err
 		}
 		return "restart", nil
 
 	case "CreateContainerConfigError", "CreateContainerError":
-		if err := b.RedeployWorkspace(ctx, workspaceID); err != nil {
+		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
 			return "redeploy", err
 		}
 		return "redeploy", nil
 	}
 
 	if strings.EqualFold(status.PodPhase, string(corev1.PodFailed)) {
-		if err := b.RedeployWorkspace(ctx, workspaceID); err != nil {
+		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
 			return "redeploy", err
 		}
 		return "redeploy", nil
 	}
 
 	if !status.Healthy {
-		if err := b.RestartWorkspace(ctx, workspaceID); err != nil {
+		if err := b.RestartInstance(ctx, workspaceID); err != nil {
 			return "restart", err
 		}
 		return "restart", nil
@@ -177,7 +177,7 @@ func (b *Bridge) RepairWorkspace(ctx context.Context, workspaceID string) (strin
 
 // GetWorkspaceEvents returns the 50 most recent Kubernetes events for resources
 // belonging to this workspace release (deployment, pods, PVCs, service).
-func (b *Bridge) GetWorkspaceEvents(ctx context.Context, workspaceID string) ([]WorkspaceEvent, error) {
+func (b *Bridge) GetInstanceEvents(ctx context.Context, workspaceID string) ([]InstanceEvent, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return nil, err
@@ -213,7 +213,7 @@ func (b *Bridge) GetWorkspaceEvents(ctx context.Context, workspaceID string) ([]
 		return nil, fmt.Errorf("list events: %w", err)
 	}
 
-	events := make([]WorkspaceEvent, 0, len(list.Items))
+	events := make([]InstanceEvent, 0, len(list.Items))
 	for _, ev := range list.Items {
 		if !relevant[ev.InvolvedObject.Name] {
 			continue
@@ -222,7 +222,7 @@ func (b *Bridge) GetWorkspaceEvents(ctx context.Context, workspaceID string) ([]
 		if lastTime.IsZero() {
 			lastTime = ev.EventTime.Time
 		}
-		events = append(events, WorkspaceEvent{
+		events = append(events, InstanceEvent{
 			Type:      ev.Type,
 			Reason:    ev.Reason,
 			Message:   ev.Message,
@@ -260,10 +260,10 @@ func (b *Bridge) RecreateTerminalSession(ctx context.Context, workspaceID string
 
 	pod := selectPod(pods.Items)
 	if pod == nil {
-		return nil, fmt.Errorf("no running pods found for workspace %s", workspaceID)
+		return nil, fmt.Errorf("no running pods found for instance %s", workspaceID)
 	}
 	if pod.Status.Phase != corev1.PodRunning {
-		return nil, fmt.Errorf("pod %s is not running (phase: %s) — workspace may still be starting", pod.Name, pod.Status.Phase)
+		return nil, fmt.Errorf("pod %s is not running (phase: %s) — instance may still be starting", pod.Name, pod.Status.Phase)
 	}
 
 	containerName := ""
@@ -278,11 +278,11 @@ func (b *Bridge) RecreateTerminalSession(ctx context.Context, workspaceID string
 	}
 
 	return &TerminalSession{
-		WorkspaceID:   workspaceID,
+		InstanceID:   workspaceID,
 		Namespace:     ns,
 		PodName:       pod.Name,
 		ContainerName: containerName,
-		ExecURL:       fmt.Sprintf("/v1/workspaces/%s/exec", workspaceID),
+		ExecURL:       fmt.Sprintf("/v1/instances/%s/exec", workspaceID),
 		Token:         tok,
 	}, nil
 }
@@ -346,7 +346,7 @@ func (b *Bridge) waitForDeploymentReady(ctx context.Context, ns, releaseName str
 }
 
 // waitForWorkspaceHealth polls the internal health probe until it returns 2xx or the context deadline passes.
-func (b *Bridge) waitForWorkspaceHealth(ctx context.Context, workspaceID string, timeout time.Duration) error {
+func (b *Bridge) waitForInstanceHealth(ctx context.Context, workspaceID string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -363,16 +363,16 @@ func (b *Bridge) waitForWorkspaceHealth(ctx context.Context, workspaceID string,
 	defer ticker.Stop()
 
 	// Check immediately before waiting for the first tick.
-	if healthy, _, _ := b.checkWorkspaceHealth(ctx, spec); healthy {
+	if healthy, _, _ := b.checkInstanceHealth(ctx, spec); healthy {
 		return nil
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("workspace %s did not become healthy within %s", workspaceID, timeout)
+			return fmt.Errorf("instance %s did not become healthy within %s", workspaceID, timeout)
 		case <-ticker.C:
-			if healthy, _, _ := b.checkWorkspaceHealth(ctx, spec); healthy {
+			if healthy, _, _ := b.checkInstanceHealth(ctx, spec); healthy {
 				return nil
 			}
 		}

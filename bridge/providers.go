@@ -69,7 +69,7 @@ func (b *Bridge) getOrCreateWorkspaceSecret(ctx context.Context, ns, secretName 
 // SetWorkspaceProvider stores a provider's API key in the workspace k8s Secret and
 // performs a Helm upgrade so the Deployment gets the secretKeyRef for the key, then
 // waits for the rolling update to complete.
-func (b *Bridge) SetWorkspaceProvider(ctx context.Context, workspaceID string, req ProviderConfigRequest) error {
+func (b *Bridge) SetInstanceProvider(ctx context.Context, workspaceID string, req ProviderConfigRequest) error {
 	secretKey, ok := providerSecretKeys[req.Provider]
 	if !ok {
 		return fmt.Errorf("unknown provider %q; valid: %s", req.Provider, strings.Join(providerNames(), ", "))
@@ -104,16 +104,16 @@ func (b *Bridge) SetWorkspaceProvider(ctx context.Context, workspaceID string, r
 	spec.Secrets[secretKey] = "" // value lives in bridge-owned Secret
 	spec.OverwriteConfig = false
 
-	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
+	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[SetWorkspaceProvider] Updated %s key for workspace %s", req.Provider, workspaceID)
+	b.Logger.Printf("[SetInstanceProvider] Updated %s key for instance %s", req.Provider, workspaceID)
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
 // GetWorkspaceProviders lists all providers that have API keys set for the workspace.
 // The actual key values are never returned.
-func (b *Bridge) GetWorkspaceProviders(ctx context.Context, workspaceID string) ([]ProviderInfo, error) {
+func (b *Bridge) GetInstanceProviders(ctx context.Context, workspaceID string) ([]ProviderInfo, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return nil, err
@@ -156,7 +156,7 @@ func (b *Bridge) GetWorkspaceProviders(ctx context.Context, workspaceID string) 
 
 // DeleteWorkspaceProvider removes a provider's API key from the workspace k8s Secret
 // and performs a Helm upgrade to remove the secretKeyRef from the Deployment.
-func (b *Bridge) DeleteWorkspaceProvider(ctx context.Context, workspaceID, provider string) error {
+func (b *Bridge) DeleteInstanceProvider(ctx context.Context, workspaceID, provider string) error {
 	secretKey, ok := providerSecretKeys[provider]
 	if !ok {
 		return fmt.Errorf("unknown provider %q", provider)
@@ -190,16 +190,16 @@ func (b *Bridge) DeleteWorkspaceProvider(ctx context.Context, workspaceID, provi
 	delete(spec.Secrets, secretKey)
 	spec.OverwriteConfig = false
 
-	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
+	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[DeleteWorkspaceProvider] Removed %s key for workspace %s", provider, workspaceID)
+	b.Logger.Printf("[DeleteInstanceProvider] Removed %s key for instance %s", provider, workspaceID)
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
 // SetWorkspaceModel updates the active model, provider, and optional base URL by
 // performing a Helm upgrade that writes a new config.yaml on the next pod start.
-func (b *Bridge) SetWorkspaceModel(ctx context.Context, workspaceID string, req SetModelRequest) error {
+func (b *Bridge) SetInstanceModel(ctx context.Context, workspaceID string, req SetModelRequest) error {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return err
@@ -220,10 +220,10 @@ func (b *Bridge) SetWorkspaceModel(ctx context.Context, workspaceID string, req 
 	}
 	spec.OverwriteConfig = true
 
-	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
+	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[SetWorkspaceModel] Updated model=%s provider=%s for workspace %s", req.Model, req.Provider, workspaceID)
+	b.Logger.Printf("[SetInstanceModel] Updated model=%s provider=%s for instance %s", req.Model, req.Provider, workspaceID)
 	return nil
 }
 
