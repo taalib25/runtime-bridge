@@ -38,6 +38,7 @@ type Bridge struct {
 	HelmConfig     *action.Configuration
 	KubeClient     *kubernetes.Clientset
 	DynamicClient  dynamic.Interface
+	RESTConfig     *rest.Config
 	ClusterName    string
 	KubeconfigPath string
 	ChartPath      string
@@ -49,6 +50,12 @@ type Bridge struct {
 	mu             sync.RWMutex
 	operations     map[string]*Operation
 	pendingCreates sync.Map // workspaceID → pendingCreate; throttles duplicate creates
+	execTokens     sync.Map // token(string) → execToken; short-lived WebSocket auth tokens
+}
+
+type execToken struct {
+	workspaceID string
+	expiry      time.Time
 }
 
 type pendingCreate struct {
@@ -82,6 +89,7 @@ func NewBridge(cfg Config) (*Bridge, error) {
 		HelmConfig:     actionConfig,
 		KubeClient:     kubeClient,
 		DynamicClient:  dynamicClient,
+		RESTConfig:     restConfig,
 		ClusterName:    cfg.ClusterName,
 		KubeconfigPath: cfg.KubeconfigPath,
 		ChartPath:      cfg.ChartPath,
@@ -144,15 +152,43 @@ func (b *Bridge) Router() http.Handler {
 
 	v1 := r.PathPrefix("/v1").Subrouter()
 	v1.Use(b.authMiddleware)
-	v1.HandleFunc("/workspaces", b.handleListWorkspaces).Methods(http.MethodGet)
-	v1.HandleFunc("/workspaces/{id}", b.handleCreateWorkspace).Methods(http.MethodPost)
-	v1.HandleFunc("/workspaces/{id}", b.handleGetWorkspace).Methods(http.MethodGet)
-	v1.HandleFunc("/workspaces/{id}", b.handleUpdateWorkspace).Methods(http.MethodPut)
-	v1.HandleFunc("/workspaces/{id}", b.handleDeleteWorkspace).Methods(http.MethodDelete)
-	v1.HandleFunc("/workspaces/{id}/status", b.handleGetStatus).Methods(http.MethodGet)
-	v1.HandleFunc("/workspaces/{id}/health", b.handleHealth).Methods(http.MethodGet)
-	v1.HandleFunc("/workspaces/{id}/operations", b.handleListWorkspaceOperations).Methods(http.MethodGet)
+	v1.HandleFunc("/instances", b.handleListInstances).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}", b.handleCreateInstance).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}", b.handleGetInstance).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}", b.handleUpdateInstance).Methods(http.MethodPut)
+	v1.HandleFunc("/instances/{id}", b.handleDeleteInstance).Methods(http.MethodDelete)
+	v1.HandleFunc("/instances/{id}/status", b.handleGetStatus).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/health", b.handleHealth).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/exec", b.handleExec).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/events", b.handleGetEvents).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/operations", b.handleListInstanceOperations).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/restart", b.handleRestartInstance).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}/redeploy", b.handleRedeployInstance).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}/rollback", b.handleRollbackInstance).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}/repair", b.handleRepairInstance).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}/terminal/recreate", b.handleRecreateTerminal).Methods(http.MethodPost)
 	v1.HandleFunc("/operations/{id}", b.handleGetOperation).Methods(http.MethodGet)
+
+	// Provider config
+	v1.HandleFunc("/instances/{id}/config/providers", b.handleGetInstanceProviders).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/config/providers", b.handleSetInstanceProvider).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}/config/providers/{name}", b.handleUpdateInstanceProvider).Methods(http.MethodPut)
+	v1.HandleFunc("/instances/{id}/config/providers/{name}", b.handleDeleteInstanceProvider).Methods(http.MethodDelete)
+	v1.HandleFunc("/instances/{id}/config/model", b.handleSetInstanceModel).Methods(http.MethodPut)
+
+	// Messaging integrations
+	v1.HandleFunc("/instances/{id}/integrations", b.handleGetInstanceIntegrations).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/integrations/{platform}", b.handleEnableIntegration).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}/integrations/{platform}", b.handleDisableIntegration).Methods(http.MethodDelete)
+
+	// Agent templates
+	v1.HandleFunc("/agents", b.handleListAgentTemplates).Methods(http.MethodGet)
+	v1.HandleFunc("/agents", b.handleCreateAgentTemplate).Methods(http.MethodPost)
+	v1.HandleFunc("/agents/{agentId}", b.handleGetAgentTemplate).Methods(http.MethodGet)
+	v1.HandleFunc("/agents/{agentId}", b.handleUpdateAgentTemplate).Methods(http.MethodPut)
+	v1.HandleFunc("/agents/{agentId}", b.handleDeleteAgentTemplate).Methods(http.MethodDelete)
+	v1.HandleFunc("/instances/{id}/agent", b.handleApplyAgentTemplate).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}/agent", b.handleGetInstanceAgent).Methods(http.MethodGet)
 
 	return b.metricsMiddleware(r)
 }
@@ -187,6 +223,19 @@ func (b *Bridge) metricsMiddleware(next http.Handler) http.Handler {
 
 func (b *Bridge) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Short-lived exec tokens are accepted on the WebSocket upgrade path so
+		// browsers can connect without custom headers (WebSocket API doesn't support them).
+		if tok := r.URL.Query().Get("token"); tok != "" {
+			vars := mux.Vars(r)
+			wsID := vars["id"]
+			if b.consumeExecToken(tok, wsID) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			b.Logger.Printf("[Auth] 401 %s %s — invalid or expired exec token", r.Method, r.URL.Path)
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized"})
+			return
+		}
 		provided := r.Header.Get(sharedSecretHeader)
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(b.Config.BridgeSecret)) != 1 {
 			b.Logger.Printf("[Auth] 401 %s %s — missing or wrong %s (provided len=%d)", r.Method, r.URL.Path, sharedSecretHeader, len(provided))
@@ -195,6 +244,29 @@ func (b *Bridge) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// issueExecToken mints a single-use 32-byte random token tied to workspaceID.
+// The token expires after 2 minutes — enough for a browser to open the WebSocket.
+func (b *Bridge) issueExecToken(workspaceID string) (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate exec token: %w", err)
+	}
+	tok := hex.EncodeToString(buf)
+	b.execTokens.Store(tok, execToken{workspaceID: workspaceID, expiry: time.Now().Add(2 * time.Minute)})
+	return tok, nil
+}
+
+// consumeExecToken validates and atomically deletes a token.
+// Returns true only if the token exists, hasn't expired, and matches workspaceID.
+func (b *Bridge) consumeExecToken(tok, workspaceID string) bool {
+	v, ok := b.execTokens.LoadAndDelete(tok)
+	if !ok {
+		return false
+	}
+	et := v.(execToken)
+	return et.workspaceID == workspaceID && time.Now().Before(et.expiry)
 }
 
 func (b *Bridge) trackOperation(operation, result string, started time.Time) {
@@ -216,12 +288,11 @@ func (b *Bridge) updateOperation(id string, mutate func(*Operation)) {
 	}
 }
 
-
 func (b *Bridge) submitOperation(operationType, workspaceID string, fn func(context.Context) error) *Operation {
 	op := &Operation{
 		ID:          newOperationID(),
 		Type:        operationType,
-		WorkspaceID: workspaceID,
+		InstanceID: workspaceID,
 		Status:      "running",
 		Message:     fmt.Sprintf("%s scheduled", operationType),
 		StartedAt:   time.Now().UTC(),
@@ -277,6 +348,14 @@ func (b *Bridge) startOperationCleanup(ctx context.Context) {
 				}
 				return true
 			})
+			// Evict expired exec tokens (normally consumed on first use, but
+			// clean up any that were never redeemed).
+			b.execTokens.Range(func(k, v any) bool {
+				if et := v.(execToken); time.Now().After(et.expiry) {
+					b.execTokens.Delete(k)
+				}
+				return true
+			})
 		case <-ctx.Done():
 			return
 		}
@@ -290,7 +369,7 @@ func (b *Bridge) releaseName(workspaceID string) string {
 	return b.Config.ReleasePrefix + workspaceID
 }
 
-func (b *Bridge) workspaceNamespace(spec WorkspaceSpec) string {
+func (b *Bridge) workspaceNamespace(spec InstanceSpec) string {
 	if strings.TrimSpace(spec.Namespace) != "" {
 		return spec.Namespace
 	}
@@ -312,7 +391,55 @@ func (b *Bridge) CheckReadiness(ctx context.Context) error {
 	return nil
 }
 
-func (b *Bridge) getWorkspace(ctx context.Context, workspaceID string) (*Workspace, error) {
+// checkClusterCapacity returns an error if the cluster has no nodes able to
+// accept new workloads — all nodes are cordoned, not Ready, or under pressure.
+func (b *Bridge) checkClusterCapacity(ctx context.Context) error {
+	nodes, err := b.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("check cluster capacity: %w", err)
+	}
+	if len(nodes.Items) == 0 {
+		return fmt.Errorf("cluster at capacity: no nodes registered")
+	}
+
+	var issues []string
+	schedulable := 0
+	for _, node := range nodes.Items {
+		if node.Spec.Unschedulable {
+			continue
+		}
+		ready := false
+		for _, c := range node.Status.Conditions {
+			switch c.Type {
+			case corev1.NodeReady:
+				if c.Status == corev1.ConditionTrue {
+					ready = true
+				}
+			case corev1.NodeMemoryPressure:
+				if c.Status == corev1.ConditionTrue {
+					issues = append(issues, fmt.Sprintf("node %s: memory pressure", node.Name))
+				}
+			case corev1.NodeDiskPressure:
+				if c.Status == corev1.ConditionTrue {
+					issues = append(issues, fmt.Sprintf("node %s: disk pressure", node.Name))
+				}
+			}
+		}
+		if ready {
+			schedulable++
+		}
+	}
+
+	if schedulable == 0 {
+		if len(issues) > 0 {
+			return fmt.Errorf("cluster at capacity: %s", strings.Join(issues, "; "))
+		}
+		return fmt.Errorf("cluster at capacity: no ready nodes available")
+	}
+	return nil
+}
+
+func (b *Bridge) getInstance(ctx context.Context, workspaceID string) (*Instance, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return nil, err
@@ -321,15 +448,15 @@ func (b *Bridge) getWorkspace(ctx context.Context, workspaceID string) (*Workspa
 	if err != nil {
 		return nil, err
 	}
-	status, err := b.GetWorkspaceStatus(ctx, workspaceID)
+	status, err := b.GetInstanceStatus(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	status.Spec = spec
-	return &Workspace{Spec: spec, Status: status}, nil
+	return &Instance{Spec: spec, Status: status}, nil
 }
 
-func (b *Bridge) lookupRelease(ctx context.Context, workspaceID string) (*release.Release, error) {
+func (b *Bridge) lookupRelease(_ context.Context, workspaceID string) (*release.Release, error) {
 	releaseName := b.releaseName(workspaceID)
 	// Workspace releases live in their own namespace — use a per-workspace config.
 	helmCfg, err := newHelmActionConfigForNamespace(b.Config, workspaceID)
@@ -348,7 +475,7 @@ func (b *Bridge) lookupRelease(ctx context.Context, workspaceID string) (*releas
 			return rel, nil
 		}
 	}
-	return nil, errWorkspaceNotFound(workspaceID)
+	return nil, errInstanceNotFound(workspaceID)
 }
 
 func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
@@ -360,11 +487,11 @@ func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
 	return err
 }
 
-func errWorkspaceNotFound(workspaceID string) error {
-	return fmt.Errorf("workspace %q not found", workspaceID)
+func errInstanceNotFound(workspaceID string) error {
+	return fmt.Errorf("instance %q not found", workspaceID)
 }
 
-func isWorkspaceNotFound(err error) bool {
+func isInstanceNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not found")
 }
 

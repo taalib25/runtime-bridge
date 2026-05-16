@@ -36,6 +36,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up SSH
         run: |
           mkdir -p ~/.ssh
@@ -44,49 +48,37 @@ jobs:
           ssh-keyscan -H 178.104.185.60 >> ~/.ssh/known_hosts
 
       - name: Build image
-        run: docker build -t hermes-bridge:latest --build-arg GIT_SHA=$(git rev-parse --short HEAD) .
+        run: |
+          docker build \
+            --build-arg GIT_SHA=${{ steps.tag.outputs.sha }} \
+            -t hermes-bridge:${{ steps.tag.outputs.sha }} \
+            -t hermes-bridge:latest \
+            .
 
       - name: Load image into k3s
         run: |
-          docker save hermes-bridge:latest | \
+          docker save hermes-bridge:${{ steps.tag.outputs.sha }} | \
             ssh root@178.104.185.60 "k3s ctr images import -"
 
-      - name: Pre-pull hermes-agent on node
+      - name: Pre-pull runtime image on node
         run: |
           ssh root@178.104.185.60 \
-            "k3s ctr images pull docker.io/nousresearch/hermes-agent:latest"
+            "k3s ctr images pull --user taalib25:${{ secrets.GHCR_PAT }} \
+              ghcr.io/taalib25/runtime-node-core:0.1.0"
 
       - name: Apply manifests
         run: |
+          sed "s|hermes-bridge:__GIT_SHA__|hermes-bridge:${{ steps.tag.outputs.sha }}|g" \
+            deploy/deployment-test.yaml > /tmp/deployment-test.yaml
+
           scp deploy/rbac.yaml root@178.104.185.60:/tmp/rbac.yaml
           scp deploy/service.yaml root@178.104.185.60:/tmp/service.yaml
-          scp deploy/deployment-test.yaml root@178.104.185.60:/tmp/deployment-test.yaml
+          scp /tmp/deployment-test.yaml root@178.104.185.60:/tmp/deployment-test.yaml
           ssh root@178.104.185.60 "
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/rbac.yaml
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/service.yaml
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f /tmp/deployment-test.yaml
           "
-
-      # - name: Apply monitoring stack (disabled — re-enable when needed)
-      #   run: |
-      #     scp deploy/monitoring/*.yaml root@178.104.185.60:/tmp/
-      #     ssh root@178.104.185.60 bash << 'SSHEOF'
-      #       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-      #       kubectl apply -f /tmp/namespace.yaml
-      #       kubectl apply -f /tmp/prometheus-rbac.yaml
-      #       kubectl apply -f /tmp/prometheus-pvc.yaml
-      #       kubectl apply -f /tmp/prometheus-config.yaml
-      #       kubectl apply -f /tmp/prometheus-deployment.yaml
-      #       kubectl apply -f /tmp/prometheus-service.yaml
-      #       kubectl apply -f /tmp/grafana-secret.yaml
-      #       kubectl apply -f /tmp/grafana-datasource.yaml
-      #       kubectl apply -f /tmp/grafana-dashboard-provisioner.yaml
-      #       kubectl apply -f /tmp/grafana-dashboard-hermes.yaml
-      #       kubectl apply -f /tmp/grafana-pvc.yaml
-      #       kubectl apply -f /tmp/grafana-deployment.yaml
-      #       kubectl apply -f /tmp/grafana-service.yaml
-      #       kubectl apply -f /tmp/grafana-ingress.yaml
-      #     SSHEOF
 
       - name: Restart & wait for rollout
         run: |
@@ -106,8 +98,8 @@ jobs:
             echo "=== /readyz ==="
             curl -sf -H "Host: bridge.hermeshq.net" http://localhost/readyz | grep '"status":"ready"'
 
-            echo "=== /v1/workspaces (auth) ==="
-            curl -sf -H "Host: bridge.hermeshq.net" -H "X-Bridge-Secret: $SECRET" http://localhost/v1/workspaces | grep '"items"'
+            echo "=== /v1/instances (auth) ==="
+            curl -sf -H "Host: bridge.hermeshq.net" -H "X-Bridge-Secret: $SECRET" http://localhost/v1/instances | grep '"items"'
 
             echo "All smoke tests passed."
           EOF

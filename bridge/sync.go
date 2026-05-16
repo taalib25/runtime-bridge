@@ -9,21 +9,21 @@ func (b *Bridge) StartSyncLoop(ctx context.Context) {
 	ticker := time.NewTicker(b.Config.SyncInterval)
 	defer ticker.Stop()
 
-	b.syncWorkspaces(ctx)
+	b.syncInstances(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			b.syncWorkspaces(ctx)
+			b.syncInstances(ctx)
 		}
 	}
 }
 
-func (b *Bridge) syncWorkspaces(ctx context.Context) {
-	workspaces, err := b.ListWorkspaces(ctx)
+func (b *Bridge) syncInstances(ctx context.Context) {
+	workspaces, err := b.ListInstances(ctx)
 	if err != nil {
-		b.Logger.Printf("Failed to list workspaces during sync: %v", err)
+		b.Logger.Printf("Failed to list instances during sync: %v", err)
 		return
 	}
 
@@ -33,14 +33,14 @@ func (b *Bridge) syncWorkspaces(ctx context.Context) {
 		if workspace.Healthy {
 			health = 1.0
 		}
-		b.Metrics.WorkspaceHealth.WithLabelValues(b.ClusterName, workspace.WorkspaceID).Set(health)
+		b.Metrics.WorkspaceHealth.WithLabelValues(b.ClusterName, workspace.InstanceID).Set(health)
 
 		if !workspace.Healthy || workspace.Phase == "failed" {
-			b.Logger.Printf("ALERT workspace unhealthy: id=%s phase=%s namespace=%s message=%s", workspace.WorkspaceID, workspace.Phase, workspace.Namespace, workspace.Message)
+			b.Logger.Printf("ALERT instance unhealthy: id=%s phase=%s namespace=%s message=%s", workspace.InstanceID, workspace.Phase, workspace.Namespace, workspace.Message)
 			continue
 		}
 		if workspace.Phase == "creating" && now.Sub(workspace.CreatedAt) > b.Config.OperationTimeout {
-			b.Logger.Printf("ALERT workspace stuck creating: id=%s namespace=%s age=%s", workspace.WorkspaceID, workspace.Namespace, now.Sub(workspace.CreatedAt))
+			b.Logger.Printf("ALERT instance stuck creating: id=%s namespace=%s age=%s", workspace.InstanceID, workspace.Namespace, now.Sub(workspace.CreatedAt))
 		}
 	}
 }

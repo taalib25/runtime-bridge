@@ -1,0 +1,578 @@
+package main
+
+import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// ─── Pure-function helpers ────────────────────────────────────────────────────
+
+func TestBuildExtraSecretKeys_PassesAllKeys(t *testing.T) {
+	input := map[string]string{
+		"OPENAI_API_KEY":     "",
+		"GOOGLE_API_KEY":     "",
+		"TELEGRAM_BOT_TOKEN": "",
+	}
+	got := buildExtraSecretKeys(input)
+	for k := range input {
+		if got[k] != k {
+			t.Errorf("expected extra[%q]=%q, got %q", k, k, got[k])
+		}
+	}
+	if len(got) != len(input) {
+		t.Errorf("expected %d keys, got %d", len(input), len(got))
+	}
+}
+
+func TestBuildExtraSecretKeys_Empty(t *testing.T) {
+	got := buildExtraSecretKeys(map[string]string{})
+	if len(got) != 0 {
+		t.Errorf("expected empty map, got %v", got)
+	}
+}
+
+func TestSecretKeysFromRelease_ExtractsKeys(t *testing.T) {
+	config := map[string]any{
+		"extraSecretKeys": map[string]any{
+			"OPENAI_API_KEY":     "OPENAI_API_KEY",
+			"TELEGRAM_BOT_TOKEN": "TELEGRAM_BOT_TOKEN",
+		},
+	}
+	got := secretKeysFromRelease(config)
+	if got["OPENAI_API_KEY"] != "OPENAI_API_KEY" {
+		t.Errorf("expected OPENAI_API_KEY, got %q", got["OPENAI_API_KEY"])
+	}
+	if got["TELEGRAM_BOT_TOKEN"] != "TELEGRAM_BOT_TOKEN" {
+		t.Errorf("expected TELEGRAM_BOT_TOKEN, got %q", got["TELEGRAM_BOT_TOKEN"])
+	}
+}
+
+func TestSecretKeysFromRelease_MissingKey(t *testing.T) {
+	got := secretKeysFromRelease(map[string]any{})
+	if len(got) != 0 {
+		t.Errorf("expected empty result, got %v", got)
+	}
+}
+
+func TestSecretKeysFromRelease_WrongType(t *testing.T) {
+	config := map[string]any{"extraSecretKeys": "not-a-map"}
+	got := secretKeysFromRelease(config)
+	if len(got) != 0 {
+		t.Errorf("expected empty result on wrong type, got %v", got)
+	}
+}
+
+func TestEnvMapFromRelease_ExtractsEnv(t *testing.T) {
+	config := map[string]any{
+		"extraEnv": map[string]any{
+			"WORKSPACE_ID":      "ws-abc",
+			"WHATSAPP_ENABLED":  "true",
+		},
+	}
+	got := envMapFromRelease(config)
+	if got["WORKSPACE_ID"] != "ws-abc" {
+		t.Errorf("expected ws-abc, got %q", got["WORKSPACE_ID"])
+	}
+	if got["WHATSAPP_ENABLED"] != "true" {
+		t.Errorf("expected true, got %q", got["WHATSAPP_ENABLED"])
+	}
+}
+
+func TestEnvMapFromRelease_Missing(t *testing.T) {
+	got := envMapFromRelease(map[string]any{})
+	if len(got) != 0 {
+		t.Errorf("expected empty result, got %v", got)
+	}
+}
+
+func TestInstanceSecretName(t *testing.T) {
+	b := newTestBridge("s")
+	got := b.workspaceSecretName("ws-1234567890abcdef")
+	if !strings.HasSuffix(got, "-secrets") {
+		t.Errorf("expected -secrets suffix, got %q", got)
+	}
+	if !strings.Contains(got, "ws-1234567890abcdef") {
+		t.Errorf("expected workspaceID in secret name, got %q", got)
+	}
+}
+
+// ─── splitImageReference ──────────────────────────────────────────────────────
+
+func TestSplitImageReference_WithTag(t *testing.T) {
+	repo, tag := splitImageReference("ghcr.io/org/image:v1.2.3")
+	if repo != "ghcr.io/org/image" {
+		t.Errorf("unexpected repo: %q", repo)
+	}
+	if tag != "v1.2.3" {
+		t.Errorf("unexpected tag: %q", tag)
+	}
+}
+
+func TestSplitImageReference_NoTag(t *testing.T) {
+	repo, tag := splitImageReference("ghcr.io/org/image")
+	if repo != "ghcr.io/org/image" {
+		t.Errorf("unexpected repo: %q", repo)
+	}
+	if tag != "" {
+		t.Errorf("expected empty tag, got %q", tag)
+	}
+}
+
+func TestSplitImageReference_Digest(t *testing.T) {
+	img := "ghcr.io/org/image@sha256:abc123"
+	repo, tag := splitImageReference(img)
+	if repo != img {
+		t.Errorf("expected full image as repo for digest, got %q", repo)
+	}
+	if tag != "" {
+		t.Errorf("expected empty tag for digest, got %q", tag)
+	}
+}
+
+func TestSplitImageReference_Empty(t *testing.T) {
+	repo, tag := splitImageReference("")
+	if repo != "" || tag != "" {
+		t.Errorf("expected empty repo/tag, got %q/%q", repo, tag)
+	}
+}
+
+// ─── buildValues — secrets structure ─────────────────────────────────────────
+
+func TestBuildValues_SecretsExistingSecret(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{InstanceID: "ws-aabbccddeeff0011", TenantID: "t1", Image: "img"}
+	vals, err := b.buildValues(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets, ok := vals["secrets"].(map[string]any)
+	if !ok {
+		t.Fatal("secrets is not a map")
+	}
+	existingSecret, _ := secrets["existingSecret"].(string)
+	if !strings.Contains(existingSecret, "ws-aabbccddeeff0011") {
+		t.Errorf("existingSecret should reference the workspaceID, got %q", existingSecret)
+	}
+	if secrets["create"] != false {
+		t.Errorf("secrets.create should be false")
+	}
+}
+
+func TestBuildValues_ExtraSecretKeys(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{
+		InstanceID: "ws-aabbccddeeff0011",
+		TenantID:    "t1",
+		Image:       "img",
+		Secrets:     map[string]string{"GOOGLE_API_KEY": "", "DISCORD_BOT_TOKEN": ""},
+	}
+	vals, err := b.buildValues(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra, ok := vals["extraSecretKeys"].(map[string]string)
+	if !ok {
+		t.Fatal("extraSecretKeys is not a map[string]string")
+	}
+	if extra["GOOGLE_API_KEY"] != "GOOGLE_API_KEY" {
+		t.Errorf("expected GOOGLE_API_KEY in extraSecretKeys, got %v", extra)
+	}
+	if extra["DISCORD_BOT_TOKEN"] != "DISCORD_BOT_TOKEN" {
+		t.Errorf("expected DISCORD_BOT_TOKEN in extraSecretKeys, got %v", extra)
+	}
+}
+
+func TestBuildValues_ExtraEnv(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{
+		InstanceID: "ws-aabbccddeeff0011",
+		TenantID:    "t1",
+		Image:       "img",
+		EnvMap:      map[string]string{"MY_CUSTOM_VAR": "hello"},
+	}
+	vals, err := b.buildValues(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extraEnv, ok := vals["extraEnv"].(map[string]string)
+	if !ok {
+		t.Fatal("extraEnv is not a map[string]string")
+	}
+	if extraEnv["MY_CUSTOM_VAR"] != "hello" {
+		t.Errorf("expected MY_CUSTOM_VAR in extraEnv, got %v", extraEnv)
+	}
+}
+
+// ─── decodeIntegrationRequest ─────────────────────────────────────────────────
+
+func integrationReq(t *testing.T, body string) *http.Request {
+	t.Helper()
+	return httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+}
+
+func TestDecodeIntegration_Telegram_Valid(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"botToken":"tok123","allowedUsers":"u1,u2"}`), "telegram", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["TELEGRAM_BOT_TOKEN"] != "tok123" {
+		t.Errorf("expected token, got %q", cfg["TELEGRAM_BOT_TOKEN"])
+	}
+	if cfg["TELEGRAM_ALLOWED_USERS"] != "u1,u2" {
+		t.Errorf("expected allowed users, got %q", cfg["TELEGRAM_ALLOWED_USERS"])
+	}
+}
+
+func TestDecodeIntegration_Telegram_MissingToken(t *testing.T) {
+	err := decodeIntegrationRequest(integrationReq(t, `{}`), "telegram", map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "botToken") {
+		t.Fatalf("expected botToken error, got %v", err)
+	}
+}
+
+func TestDecodeIntegration_Telegram_WebhookRequiresSecret(t *testing.T) {
+	err := decodeIntegrationRequest(
+		integrationReq(t, `{"botToken":"tok","webhookUrl":"https://example.com"}`),
+		"telegram", map[string]string{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "webhookSecret") {
+		t.Fatalf("expected webhookSecret error, got %v", err)
+	}
+}
+
+func TestDecodeIntegration_Discord_Valid(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"botToken":"dbot","allowedUsers":"u1"}`), "discord", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["DISCORD_BOT_TOKEN"] != "dbot" {
+		t.Errorf("expected dbot, got %q", cfg["DISCORD_BOT_TOKEN"])
+	}
+}
+
+func TestDecodeIntegration_Discord_MissingToken(t *testing.T) {
+	err := decodeIntegrationRequest(integrationReq(t, `{}`), "discord", map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "botToken") {
+		t.Fatalf("expected botToken error, got %v", err)
+	}
+}
+
+func TestDecodeIntegration_Slack_Valid(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"botToken":"xoxb","appToken":"xapp"}`), "slack", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["SLACK_BOT_TOKEN"] != "xoxb" {
+		t.Errorf("expected xoxb, got %q", cfg["SLACK_BOT_TOKEN"])
+	}
+	if cfg["SLACK_APP_TOKEN"] != "xapp" {
+		t.Errorf("expected xapp, got %q", cfg["SLACK_APP_TOKEN"])
+	}
+}
+
+func TestDecodeIntegration_Slack_MissingAppToken(t *testing.T) {
+	err := decodeIntegrationRequest(integrationReq(t, `{"botToken":"xoxb"}`), "slack", map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "appToken") {
+		t.Fatalf("expected appToken error, got %v", err)
+	}
+}
+
+func TestDecodeIntegration_WhatsApp(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"allowAllUsers":true}`), "whatsapp", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["WHATSAPP_ENABLED"] != "true" {
+		t.Errorf("expected WHATSAPP_ENABLED=true, got %q", cfg["WHATSAPP_ENABLED"])
+	}
+	if cfg["WHATSAPP_ALLOW_ALL_USERS"] != "true" {
+		t.Errorf("expected WHATSAPP_ALLOW_ALL_USERS=true, got %q", cfg["WHATSAPP_ALLOW_ALL_USERS"])
+	}
+}
+
+func TestDecodeIntegration_Signal_Valid(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"httpUrl":"http://signal:8080","account":"+1234"}`), "signal", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["SIGNAL_HTTP_URL"] != "http://signal:8080" {
+		t.Errorf("expected SIGNAL_HTTP_URL, got %q", cfg["SIGNAL_HTTP_URL"])
+	}
+}
+
+func TestDecodeIntegration_Signal_MissingAccount(t *testing.T) {
+	err := decodeIntegrationRequest(integrationReq(t, `{"httpUrl":"http://signal:8080"}`), "signal", map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "account") {
+		t.Fatalf("expected account error, got %v", err)
+	}
+}
+
+func TestDecodeIntegration_DingTalk_Valid(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"clientId":"cid","clientSecret":"csec"}`), "dingtalk", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["DINGTALK_CLIENT_ID"] != "cid" {
+		t.Errorf("expected cid, got %q", cfg["DINGTALK_CLIENT_ID"])
+	}
+	if cfg["DINGTALK_CLIENT_SECRET"] != "csec" {
+		t.Errorf("expected csec, got %q", cfg["DINGTALK_CLIENT_SECRET"])
+	}
+}
+
+func TestDecodeIntegration_DingTalk_MissingFields(t *testing.T) {
+	if err := decodeIntegrationRequest(integrationReq(t, `{"clientId":"cid"}`), "dingtalk", map[string]string{}); err == nil {
+		t.Fatal("expected clientSecret error")
+	}
+	if err := decodeIntegrationRequest(integrationReq(t, `{}`), "dingtalk", map[string]string{}); err == nil {
+		t.Fatal("expected clientId error")
+	}
+}
+
+func TestDecodeIntegration_Feishu_Valid(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"appId":"aid","appSecret":"asec","encryptKey":"ek"}`), "feishu", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["FEISHU_APP_ID"] != "aid" {
+		t.Errorf("expected aid, got %q", cfg["FEISHU_APP_ID"])
+	}
+	if cfg["FEISHU_ENCRYPT_KEY"] != "ek" {
+		t.Errorf("expected ek, got %q", cfg["FEISHU_ENCRYPT_KEY"])
+	}
+}
+
+func TestDecodeIntegration_Feishu_OptionalEncryptKey(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"appId":"aid","appSecret":"asec"}`), "feishu", cfg)
+	if err != nil {
+		t.Fatalf("encryptKey should be optional, got error: %v", err)
+	}
+	if _, set := cfg["FEISHU_ENCRYPT_KEY"]; set {
+		t.Error("FEISHU_ENCRYPT_KEY should not be set when not provided")
+	}
+}
+
+func TestDecodeIntegration_WeCom_Valid(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"botId":"bid","secret":"wsec","websocketUrl":"wss://wecom"}`), "wecom", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["WECOM_BOT_ID"] != "bid" {
+		t.Errorf("expected bid, got %q", cfg["WECOM_BOT_ID"])
+	}
+	if cfg["WECOM_WEBSOCKET_URL"] != "wss://wecom" {
+		t.Errorf("expected websocketUrl, got %q", cfg["WECOM_WEBSOCKET_URL"])
+	}
+}
+
+func TestDecodeIntegration_WeCom_MissingSecret(t *testing.T) {
+	err := decodeIntegrationRequest(integrationReq(t, `{"botId":"bid"}`), "wecom", map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "secret") {
+		t.Fatalf("expected secret error, got %v", err)
+	}
+}
+
+func TestDecodeIntegration_BlueBubbles_Valid(t *testing.T) {
+	cfg := map[string]string{}
+	err := decodeIntegrationRequest(integrationReq(t, `{"serverUrl":"http://bb:1234","password":"pass"}`), "bluebubbles", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["BLUEBUBBLES_SERVER_URL"] != "http://bb:1234" {
+		t.Errorf("expected serverUrl, got %q", cfg["BLUEBUBBLES_SERVER_URL"])
+	}
+}
+
+func TestDecodeIntegration_BlueBubbles_MissingPassword(t *testing.T) {
+	err := decodeIntegrationRequest(integrationReq(t, `{"serverUrl":"http://bb:1234"}`), "bluebubbles", map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "password") {
+		t.Fatalf("expected password error, got %v", err)
+	}
+}
+
+func TestDecodeIntegration_Unsupported(t *testing.T) {
+	err := decodeIntegrationRequest(integrationReq(t, `{}`), "twitter", map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("expected unsupported error, got %v", err)
+	}
+}
+
+// ─── Provider handler validation (no k8s needed — fails before any k8s call) ──
+
+func authedReq(method, path, body, secret string) *http.Request {
+	var buf *strings.Reader
+	if body != "" {
+		buf = strings.NewReader(body)
+	} else {
+		buf = strings.NewReader("")
+	}
+	req := httptest.NewRequest(method, path, buf)
+	req.Header.Set("X-Bridge-Secret", secret)
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func TestHandleSetInstanceProvider_BadBody(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/config/providers", "{bad json}", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleSetInstanceProvider_MissingProvider(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/config/providers", `{"apiKey":"sk-x"}`, "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleSetInstanceProvider_MissingAPIKey(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/config/providers", `{"provider":"openai"}`, "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleSetInstanceModel_MissingFields(t *testing.T) {
+	b := newTestBridge("secret")
+
+	cases := []struct {
+		body string
+		want string
+	}{
+		{`{}`, "provider"},
+		{`{"provider":"openai"}`, "model"},
+	}
+	for _, tc := range cases {
+		rr := httptest.NewRecorder()
+		req := authedReq(http.MethodPut, "/v1/instances/ws-1234567890abcdef/config/model", tc.body, "secret")
+		b.Router().ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("body=%s: expected 400, got %d: %s", tc.body, rr.Code, rr.Body.String())
+		}
+	}
+}
+
+// ─── Integration handler validation ──────────────────────────────────────────
+
+func TestHandleEnableIntegration_BadBody(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/integrations/telegram", "{bad}", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleEnableIntegration_UnsupportedPlatform(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/integrations/twitter", `{}`, "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleEnableIntegration_MissingRequiredField(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	// Telegram with no botToken → should 400 before any k8s call
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/integrations/telegram", `{}`, "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ─── Agent template handler validation ───────────────────────────────────────
+
+func TestHandleCreateAgentTemplate_BadBody(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/agents", "{bad}", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleCreateAgentTemplate_MissingName(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/agents", `{"description":"d"}`, "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleApplyAgentTemplate_MissingAgentID(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/agent", `{}`, "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleApplyAgentTemplate_BadBody(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/agent", "{bad}", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+// ─── isAgentNotFound / isWorkspaceNotFound ────────────────────────────────────
+
+func TestIsAgentNotFound(t *testing.T) {
+	if !isAgentNotFound(bytes.ErrTooLarge) {
+		// bytes.ErrTooLarge doesn't contain "not found" — make sure false
+	}
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"agent not found", true},
+		{"template not found", true},
+		{"connection refused", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		got := isAgentNotFound(errStr(tc.msg))
+		if got != tc.want {
+			t.Errorf("isAgentNotFound(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+}
+
+// errStr is a minimal error that wraps a string message.
+type errStr string
+
+func (e errStr) Error() string { return string(e) }

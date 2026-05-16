@@ -1,13 +1,13 @@
 # Hermes Runtime Operator
 
-A Go service that manages tenant Hermes workspaces on Kubernetes via Helm. It exposes a simple HTTP API that the backend calls to create, update, and delete isolated runtime environments — each backed by a Helm release of the `hermes-agent` chart.
+A Go service that manages tenant Hermes instances on Kubernetes via Helm. It exposes a simple HTTP API that the backend calls to create, update, and delete isolated runtime environments — each backed by a Helm release of the `hermes-agent` chart.
 
 ## Architecture
 
 ```
 Backend
   │
-  │  POST /v1/workspaces/{id}   (tenantId, plan, config)
+  │  POST /v1/instances/{id}   (tenantId, plan, config)
   ▼
 Bridge (this service)
   │
@@ -31,21 +31,21 @@ All workspace endpoints require the `X-Bridge-Secret` header.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/workspaces` | List all workspaces |
-| `POST` | `/v1/workspaces/{id}` | Create workspace (Helm install) |
-| `GET` | `/v1/workspaces/{id}` | Get workspace + status |
-| `PUT` | `/v1/workspaces/{id}` | Update workspace (Helm upgrade) |
-| `DELETE` | `/v1/workspaces/{id}` | Delete workspace (Helm uninstall) |
-| `GET` | `/v1/workspaces/{id}/status` | Detailed status |
-| `GET` | `/v1/workspaces/{id}/health` | Health check |
+| `GET` | `/v1/instances` | List all instances |
+| `POST` | `/v1/instances/{id}` | Create instance (Helm install) |
+| `GET` | `/v1/instances/{id}` | Get instance + status |
+| `PUT` | `/v1/instances/{id}` | Update instance (Helm upgrade) |
+| `DELETE` | `/v1/instances/{id}` | Delete instance (Helm uninstall) |
+| `GET` | `/v1/instances/{id}/status` | Detailed status |
+| `GET` | `/v1/instances/{id}/health` | Health check |
 | `GET` | `/healthz` | Bridge liveness |
 | `GET` | `/readyz` | Bridge readiness |
 | `GET` | `/metrics` | Prometheus metrics |
 
-### Example: Create workspace
+### Example: Create instance
 
 ```bash
-curl -X POST http://bridge.hermeshq.net/v1/workspaces/tenant-001 \
+curl -X POST http://bridge.hermeshq.net/v1/instances/tenant-001 \
   -H "X-Bridge-Secret: <secret>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -150,21 +150,21 @@ bridge/
   bridge.go     HTTP router, auth middleware, Bridge struct, operation tracking
   handlers.go   HTTP request handlers (create/get/update/delete/status/health)
   helm.go       Helm client operations (install, upgrade, uninstall, list, buildValues)
-  sync.go       Periodic sync loop — alerts on stuck/unhealthy workspaces
+  sync.go       Periodic sync loop — alerts on stuck/unhealthy instances
   status.go     Translates Helm release state → WorkspaceStatus
   config.go     Config struct, env var loading, validation
-  types.go      WorkspaceSpec, WorkspaceStatus, Operation, ErrorResponse
+  types.go      InstanceSpec, WorkspaceStatus, Operation, ErrorResponse
   metrics.go    Prometheus metrics (workspace count, operation latency, results)
   bridge_test.go  Unit tests (21 tests — auth, handlers, config, buildValues, helpers)
 ```
 
 ## Workspace lifecycle
 
-1. Backend POSTs `WorkspaceSpec` to `/v1/workspaces/{id}`
+1. Backend POSTs `InstanceSpec` to `/v1/instances/{id}`
 2. Bridge validates spec, spawns async operation
 3. Helm installs `hermes-agent` chart into `{namespace}` with generated values
 4. Pod starts, mounts PVC, bootstraps Hermes config from ConfigMap
 5. Ingress routes `{workspace-id}.hermeshq.net` to the workspace service
 6. Bridge sync loop monitors health every 5 minutes and logs alerts
 
-Operations (create/update/delete) are async — bridge returns an operation object immediately. Poll `/v1/workspaces/{id}` to check when `phase: ready`.
+Operations (create/update/delete) are async — bridge returns an operation object immediately. Poll `/v1/instances/{id}` to check when `phase: ready`.

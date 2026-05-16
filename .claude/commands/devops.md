@@ -131,7 +131,7 @@ ssh root@178.104.185.60 bash << 'EOF'
     -o jsonpath='{.data.secret}' | base64 -d)
   curl -sf -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/healthz
   curl -sf -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/readyz
-  curl -sf -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/v1/workspaces
+  curl -sf -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/v1/instances
 EOF
 
 # --- Sync chart ConfigMap manually ---
@@ -185,7 +185,7 @@ Push to main / go-bridge only:
   └── Sync charts/hermes-agent → ConfigMap hermes-agent-chart
   └── kubectl apply -f deploy/rbac.yaml deploy/deployment-test.yaml
   └── kubectl rollout restart + status
-  └── Smoke test /healthz /readyz /v1/workspaces
+  └── Smoke test /healthz /readyz /v1/instances
 ```
 
 **Required GitHub secret:** `HETZNER_SSH_PRIVATE_KEY` (private key for `root@178.104.185.60`)
@@ -211,20 +211,20 @@ Push to main / go-bridge only:
 ```bash
 SECRET=$(kubectl -n hermes-bridge get secret bridge-auth -o jsonpath='{.data.secret}' | base64 -d)
 
-# Create workspace
-curl -X POST https://bridge.hermeshq.net/v1/workspaces/tenant-001 \
+# Create instance
+curl -X POST https://bridge.hermeshq.net/v1/instances/tenant-001 \
   -H "X-Bridge-Secret: $SECRET" \
   -H "Content-Type: application/json" \
   -d '{"tenantId":"tenant-001","image":"nousresearch/hermes-agent","imageTag":"latest","namespace":"tenant-001","ingressEnabled":true,"createNamespace":true}'
 
-# List workspaces
-curl -sf -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/v1/workspaces
+# List instances
+curl -sf -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/v1/instances
 
-# Get workspace status
-curl -sf -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/v1/workspaces/tenant-001
+# Get instance status
+curl -sf -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/v1/instances/tenant-001
 
-# Delete workspace
-curl -X DELETE -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/v1/workspaces/tenant-001
+# Delete instance
+curl -X DELETE -H "X-Bridge-Secret: $SECRET" https://bridge.hermeshq.net/v1/instances/tenant-001
 
 # List Helm releases (all workspaces)
 ssh root@178.104.185.60 "KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm list -A"

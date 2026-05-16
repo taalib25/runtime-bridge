@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,25 +17,25 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*release.Release, error) {
+func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*release.Release, error) {
 	started := time.Now()
-	b.Logger.Printf("[CreateWorkspace] Starting for workspace %s, tenant %s", spec.WorkspaceID, spec.TenantID)
+	b.Logger.Printf("[CreateInstance] Starting for workspace %s, tenant %s", spec.InstanceID, spec.TenantID)
 
 	chart, err := loader.Load(b.ChartPath)
 	if err != nil {
 		b.trackOperation("create", "failure", started)
-		b.Logger.Printf("[CreateWorkspace] Failed to load chart: %v", err)
+		b.Logger.Printf("[CreateInstance] Failed to load chart: %v", err)
 		return nil, fmt.Errorf("load chart: %w", err)
 	}
 
 	values, err := b.buildValues(spec)
 	if err != nil {
 		b.trackOperation("create", "failure", started)
-		b.Logger.Printf("[CreateWorkspace] Failed to build values: %v", err)
+		b.Logger.Printf("[CreateInstance] Failed to build values: %v", err)
 		return nil, err
 	}
 
-	b.Logger.Printf("[CreateWorkspace] Using release name %s, namespace %s", b.releaseName(spec.WorkspaceID), b.workspaceNamespace(spec))
+	b.Logger.Printf("[CreateInstance] Using release name %s, namespace %s", b.releaseName(spec.InstanceID), b.workspaceNamespace(spec))
 
 	ns := b.workspaceNamespace(spec)
 	helmCfg, err := b.helmConfigForNamespace(ns)
@@ -51,8 +52,32 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 		}
 	}
 
+	// Seed the bridge-owned workspace Secret with any values supplied at create time
+	// (e.g. API_SERVER_KEY). The Secret must exist before the Deployment starts so
+	// secretKeyRef env vars resolve correctly.
+	if len(spec.Secrets) > 0 {
+		wsSecret, err := b.getOrCreateWorkspaceSecret(ctx, ns, b.workspaceSecretName(spec.InstanceID))
+		if err != nil {
+			b.trackOperation("create", "failure", started)
+			return nil, fmt.Errorf("seed workspace secret: %w", err)
+		}
+		changed := false
+		for k, v := range spec.Secrets {
+			if v != "" {
+				wsSecret.Data[k] = []byte(v)
+				changed = true
+			}
+		}
+		if changed {
+			if _, err := b.KubeClient.CoreV1().Secrets(ns).Update(ctx, wsSecret, metav1.UpdateOptions{}); err != nil {
+				b.trackOperation("create", "failure", started)
+				return nil, fmt.Errorf("seed workspace secret: %w", err)
+			}
+		}
+	}
+
 	install := action.NewInstall(helmCfg)
-	install.ReleaseName = b.releaseName(spec.WorkspaceID)
+	install.ReleaseName = b.releaseName(spec.InstanceID)
 	install.Namespace = ns
 	install.CreateNamespace = createNS
 	install.SkipCRDs = true
@@ -63,45 +88,50 @@ func (b *Bridge) CreateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 
 	if hasAuth {
 		if err := b.EnsureForwardAuthMiddleware(ctx, ns, strings.TrimSpace(spec.ForwardAuthURL)); err != nil {
-			b.Logger.Printf("[CreateWorkspace] Warning: failed to create ForwardAuth middleware: %v", err)
+			b.Logger.Printf("[CreateInstance] Warning: failed to create ForwardAuth middleware: %v", err)
 		}
 	}
 	if hasCORS {
 		if err := b.EnsureCORSMiddleware(ctx, ns, parseCORSOrigins(spec.CORSOrigins)); err != nil {
-			b.Logger.Printf("[CreateWorkspace] Warning: failed to create CORS middleware: %v", err)
+			b.Logger.Printf("[CreateInstance] Warning: failed to create CORS middleware: %v", err)
 		}
 	}
 
 	rel, err := install.RunWithContext(ctx, chart, values)
 	if err != nil {
-		b.trackOperation("create", "failure", started)
-		b.Logger.Printf("[CreateWorkspace] Helm install failed: %v", err)
-		return nil, err
+		// --keep-history on delete leaves an uninstalled release; helm install rejects
+		// "cannot re-use a name that is still in use". Fall back to upgrade which
+		// handles uninstalled releases cleanly (idempotent re-create).
+		if strings.Contains(err.Error(), "cannot re-use a name that is still in use") {
+			// --keep-history left an uninstalled release secret. helm upgrade also
+			// rejects it ("has no deployed releases"). Clean up the history secret
+			// so a fresh install can proceed.
+			cleanup := action.NewUninstall(helmCfg)
+			cleanup.KeepHistory = false
+			cleanup.IgnoreNotFound = true
+			cleanup.Wait = false
+			_, _ = cleanup.Run(install.ReleaseName)
+			rel, err = install.RunWithContext(ctx, chart, values)
+		}
+		if err != nil {
+			b.trackOperation("create", "failure", started)
+			b.Logger.Printf("[CreateInstance] Helm install failed: %v", err)
+			return nil, err
+		}
 	}
 
 	if hasCORS || hasAuth {
 		host := spec.Network.host()
-		if err := b.EnsureIngressRoute(ctx, ns, host, ns, 8642, hasCORS, hasAuth); err != nil {
-			b.Logger.Printf("[CreateWorkspace] Warning: failed to create IngressRoute: %v", err)
+		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth); err != nil {
+			b.Logger.Printf("[CreateInstance] Warning: failed to create IngressRoute: %v", err)
 		} else {
 			// Remove the Helm-managed Ingress so only IngressRoute routes this host.
 			b.deleteHelmIngress(ctx, ns)
 		}
 	}
 
-	if spec.DashboardEnabled {
-		if !hasAuth {
-			b.Logger.Printf("[CreateWorkspace] WARNING: dashboardEnabled=true but ForwardAuthURL not set — dash-%s is publicly accessible", spec.Network.host())
-		}
-		if dHost := dashboardHost(spec); dHost != "" {
-			if err := b.EnsureDashboardIngressRoute(ctx, ns, dHost, ns, hasCORS, hasAuth); err != nil {
-				b.Logger.Printf("[CreateWorkspace] Warning: failed to create dashboard IngressRoute: %v", err)
-			}
-		}
-	}
-
 	b.trackOperation("create", "success", started)
-	b.Logger.Printf("[CreateWorkspace] Created release %s in %s (took %v)", rel.Name, rel.Namespace, time.Since(started))
+	b.Logger.Printf("[CreateInstance] Created release %s in %s (took %v)", rel.Name, rel.Namespace, time.Since(started))
 	return rel, nil
 }
 
@@ -117,7 +147,7 @@ func (b *Bridge) deleteHelmIngress(ctx context.Context, namespace string) {
 	}
 }
 
-func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error {
+func (b *Bridge) DeleteInstance(ctx context.Context, workspaceID string) error {
 	started := time.Now()
 
 	// Write tombstone before uninstalling so the record survives even if
@@ -151,20 +181,20 @@ func (b *Bridge) DeleteWorkspace(ctx context.Context, workspaceID string) error 
 	// Best-effort: remove Traefik routing resources. The release uninstall
 	// already removed the Deployment/Service; these are bridge-managed extras.
 	if mwErr := b.DeleteIngressRoute(ctx, workspaceID); mwErr != nil {
-		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete IngressRoute: %v", mwErr)
+		b.Logger.Printf("[DeleteInstance] Warning: failed to delete IngressRoute: %v", mwErr)
 	}
 	if mwErr := b.DeleteDashboardIngressRoute(ctx, workspaceID); mwErr != nil {
-		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete dashboard IngressRoute: %v", mwErr)
+		b.Logger.Printf("[DeleteInstance] Warning: failed to delete dashboard IngressRoute: %v", mwErr)
 	}
 	if mwErr := b.DeleteForwardAuthMiddleware(ctx, workspaceID); mwErr != nil {
-		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete ForwardAuth middleware: %v", mwErr)
+		b.Logger.Printf("[DeleteInstance] Warning: failed to delete ForwardAuth middleware: %v", mwErr)
 	}
 	if mwErr := b.DeleteCORSMiddleware(ctx, workspaceID); mwErr != nil {
-		b.Logger.Printf("[DeleteWorkspace] Warning: failed to delete CORS middleware: %v", mwErr)
+		b.Logger.Printf("[DeleteInstance] Warning: failed to delete CORS middleware: %v", mwErr)
 	}
 	b.Metrics.WorkspaceHealth.DeleteLabelValues(b.ClusterName, workspaceID)
 	b.trackOperation("delete", "success", started)
-	b.Logger.Printf("[DeleteWorkspace] Deleted release %s (namespace preserved with tombstone + helm history)", workspaceID)
+	b.Logger.Printf("[DeleteInstance] Deleted release %s (namespace preserved with tombstone + helm history)", workspaceID)
 	return nil
 }
 
@@ -186,11 +216,11 @@ func (b *Bridge) writeTombstone(ctx context.Context, workspaceID string) {
 	ns.Annotations["hermes.io/deleted-by"] = "bridge"
 	ns.Annotations["hermes.io/release-preserved"] = "true"
 	if _, err := b.KubeClient.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
-		b.Logger.Printf("[DeleteWorkspace] Warning: failed to write tombstone annotation to namespace %s: %v", workspaceID, err)
+		b.Logger.Printf("[DeleteInstance] Warning: failed to write tombstone annotation to namespace %s: %v", workspaceID, err)
 	}
 }
 
-func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*release.Release, error) {
+func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*release.Release, error) {
 	started := time.Now()
 	chart, err := loader.Load(b.ChartPath)
 	if err != nil {
@@ -221,16 +251,16 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 
 	if hasAuth {
 		if err := b.EnsureForwardAuthMiddleware(ctx, ns, strings.TrimSpace(spec.ForwardAuthURL)); err != nil {
-			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update ForwardAuth middleware: %v", err)
+			b.Logger.Printf("[UpdateInstance] Warning: failed to update ForwardAuth middleware: %v", err)
 		}
 	}
 	if hasCORS {
 		if err := b.EnsureCORSMiddleware(ctx, ns, parseCORSOrigins(spec.CORSOrigins)); err != nil {
-			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update CORS middleware: %v", err)
+			b.Logger.Printf("[UpdateInstance] Warning: failed to update CORS middleware: %v", err)
 		}
 	}
 
-	rel, err := upgrade.RunWithContext(ctx, b.releaseName(spec.WorkspaceID), chart, values)
+	rel, err := upgrade.RunWithContext(ctx, b.releaseName(spec.InstanceID), chart, values)
 	if err != nil {
 		b.trackOperation("update", "failure", started)
 		return nil, err
@@ -238,32 +268,19 @@ func (b *Bridge) UpdateWorkspace(ctx context.Context, spec WorkspaceSpec) (*rele
 
 	if hasCORS || hasAuth {
 		host := spec.Network.host()
-		if err := b.EnsureIngressRoute(ctx, ns, host, ns, 8642, hasCORS, hasAuth); err != nil {
-			b.Logger.Printf("[UpdateWorkspace] Warning: failed to update IngressRoute: %v", err)
+		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth); err != nil {
+			b.Logger.Printf("[UpdateInstance] Warning: failed to update IngressRoute: %v", err)
 		} else {
 			b.deleteHelmIngress(ctx, ns)
 		}
-	}
-
-	if spec.DashboardEnabled {
-		if !hasAuth {
-			b.Logger.Printf("[UpdateWorkspace] WARNING: dashboardEnabled=true but ForwardAuthURL not set — dash-%s is publicly accessible", spec.Network.host())
-		}
-		if dHost := dashboardHost(spec); dHost != "" {
-			if err := b.EnsureDashboardIngressRoute(ctx, ns, dHost, ns, hasCORS, hasAuth); err != nil {
-				b.Logger.Printf("[UpdateWorkspace] Warning: failed to update dashboard IngressRoute: %v", err)
-			}
-		}
-	} else {
-		_ = b.DeleteDashboardIngressRoute(ctx, ns)
 	}
 
 	b.trackOperation("update", "success", started)
 	return rel, nil
 }
 
-func (b *Bridge) ListWorkspaces(ctx context.Context) ([]WorkspaceStatus, error) {
-	b.Logger.Printf("[ListWorkspaces] Starting list operation")
+func (b *Bridge) ListInstances(ctx context.Context) ([]InstanceStatus, error) {
+	b.Logger.Printf("[ListInstances] Starting list operation")
 
 	// Use an empty-namespace config so the secret driver queries across all
 	// namespaces. The bridge's default HelmConfig is scoped to hermes-bridge
@@ -277,48 +294,48 @@ func (b *Bridge) ListWorkspaces(ctx context.Context) ([]WorkspaceStatus, error) 
 	lister.AllNamespaces = true
 	releases, err := lister.Run()
 	if err != nil {
-		b.Logger.Printf("[ListWorkspaces] Helm list failed: %v", err)
+		b.Logger.Printf("[ListInstances] Helm list failed: %v", err)
 		return nil, err
 	}
 
-	b.Logger.Printf("[ListWorkspaces] Found %d total releases", len(releases))
+	b.Logger.Printf("[ListInstances] Found %d total releases", len(releases))
 
-	statuses := make([]WorkspaceStatus, 0, len(releases))
+	statuses := make([]InstanceStatus, 0, len(releases))
 	for _, rel := range releases {
-		b.Logger.Printf("[ListWorkspaces] Processing release %s (namespace: %s)", rel.Name, rel.Namespace)
+		b.Logger.Printf("[ListInstances] Processing release %s (namespace: %s)", rel.Name, rel.Namespace)
 		spec, err := workspaceSpecFromRelease(rel.Name, rel.Config, rel.Namespace, b.ClusterName)
 		if err != nil {
-			b.Logger.Printf("[ListWorkspaces] Skipping release %s: %v", rel.Name, err)
+			b.Logger.Printf("[ListInstances] Skipping release %s: %v", rel.Name, err)
 			continue
 		}
 		status, err := b.getWorkspaceStatusFromRelease(ctx, rel, spec)
 		if err != nil {
-			b.Logger.Printf("[ListWorkspaces] Failed to collect workspace status for %s: %v", spec.WorkspaceID, err)
+			b.Logger.Printf("[ListInstances] Failed to collect workspace status for %s: %v", spec.InstanceID, err)
 			continue
 		}
 		statuses = append(statuses, status)
 	}
 
 	sort.Slice(statuses, func(i, j int) bool {
-		return statuses[i].WorkspaceID < statuses[j].WorkspaceID
+		return statuses[i].InstanceID < statuses[j].InstanceID
 	})
-	b.Logger.Printf("[ListWorkspaces] Returning %d valid workspaces", len(statuses))
+	b.Logger.Printf("[ListInstances] Returning %d valid workspaces", len(statuses))
 	b.Metrics.WorkspaceCount.WithLabelValues(b.ClusterName).Set(float64(len(statuses)))
 	return statuses, nil
 }
 
-func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
-	spec = b.normalizeWorkspaceSpec(spec)
+func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
+	spec = b.normalizeInstanceSpec(spec)
 	repository, splitTag := splitImageReference(spec.Image)
 	// ImageTag from spec takes precedence; fall back to the tag embedded in the image
-	// reference, then to the normalizeWorkspaceSpec default ("latest").
+	// reference, then to the normalizeInstanceSpec default ("latest").
 	tag := spec.ImageTag
 	if tag == "" {
 		tag = splitTag
 	}
 
 	values := map[string]any{
-		"fullnameOverride": b.releaseName(spec.WorkspaceID),
+		"fullnameOverride": b.releaseName(spec.InstanceID),
 		"replicaCount":     1,
 		"strategy": map[string]any{
 			"type": "Recreate",
@@ -346,11 +363,18 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		"config": map[string]any{
 			"values": hermesConfigToMap(spec.HermesConfig),
 		},
-		// env is the chart's flat map of platform env vars (GATEWAY_ALLOW_ALL_USERS, etc.)
-		// extraEnv is for arbitrary additional env vars as a list.
-		"env":      spec.EnvMap,
-		"extraEnv": envValues(spec.Env),
-		"secrets":  buildSecrets(spec.Secrets),
+		// extraEnv is the chart's flat map of extra env vars (platform flags, workspace
+		// identity, messaging allowlists, etc.) rendered alongside runtime.env defaults.
+		// extraEnvList is for structured {name,value} env pairs from spec.Env (unused by
+		// runtime-node-core chart but preserved for forward compatibility).
+		"env":             spec.EnvMap,
+		"extraEnv":        spec.EnvMap,
+		"extraEnvList":    envValues(spec.Env),
+		"extraSecretKeys": buildExtraSecretKeys(spec.Secrets),
+		"secrets": map[string]any{
+			"create":         false,
+			"existingSecret": b.workspaceSecretName(spec.InstanceID),
+		},
 		"resources": map[string]any{
 			"requests": map[string]any{},
 			"limits":   map[string]any{},
@@ -360,21 +384,13 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		},
 		"service": map[string]any{
 			"enabled": true,
-			"ports": func() []any {
-				ports := []any{map[string]any{
-					"name": "api-server", "port": 8642, "targetPort": 8642, "protocol": "TCP",
-				}}
-				if spec.DashboardEnabled {
-					ports = append(ports, map[string]any{
-						"name": "dashboard", "port": int64(9119), "targetPort": int64(9119), "protocol": "TCP",
-					})
-				}
-				return ports
-			}(),
+			"ports": []any{map[string]any{
+				"name": "api-server", "port": spec.RuntimePort, "targetPort": spec.RuntimePort, "protocol": "TCP",
+			}},
 		},
 		"apiServer": map[string]any{
 			"enabled":     true,
-			"port":        8642,
+			"port":        spec.RuntimePort,
 			"corsOrigins": spec.CORSOrigins,
 		},
 		"ingress": map[string]any{
@@ -387,29 +403,6 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 
 	if spec.Plan != "" {
 		values["podLabels"] = map[string]any{"hermes.ai/plan": spec.Plan}
-	}
-
-	if spec.DashboardEnabled {
-		// GATEWAY_HEALTH_URL: pod shares network namespace, so 127.0.0.1 reaches the gateway container
-		dashEnv := []any{
-			map[string]any{"name": "GATEWAY_HEALTH_URL", "value": "http://127.0.0.1:8642"},
-		}
-		for k, v := range spec.EnvMap {
-			dashEnv = append(dashEnv, map[string]any{"name": k, "value": v})
-		}
-		values["extraContainers"] = []any{map[string]any{
-			"name":  "dashboard",
-			"image": repository + ":" + tag,
-			// args (not command) — entrypoint is already `hermes`; args selects the subcommand
-			"args": []any{"dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--insecure"},
-			"ports": []any{map[string]any{
-				"name": "dashboard", "containerPort": int64(9119), "protocol": "TCP",
-			}},
-			"env": dashEnv,
-			"volumeMounts": []any{map[string]any{
-				"name": "data", "mountPath": "/opt/data",
-			}},
-		}}
 	}
 
 	if policy := strings.TrimSpace(spec.ImagePullPolicy); policy != "" {
@@ -464,14 +457,14 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 			"paths": []map[string]any{{
 				"path":        spec.Network.path(),
 				"pathType":    "Prefix",
-				"servicePort": 8642,
+				"servicePort": spec.RuntimePort,
 			}},
 		}}
 	}
 	{
 		ns := spec.Namespace
 		if ns == "" {
-			ns = spec.WorkspaceID
+			ns = spec.InstanceID
 		}
 		var middlewareParts []string
 		if strings.TrimSpace(spec.CORSOrigins) != "" {
@@ -487,18 +480,106 @@ func (b *Bridge) buildValues(spec WorkspaceSpec) (map[string]any, error) {
 		}
 	}
 
+	// runtime-node-core: clear chart's default hermes-agent args, set UID 1024,
+	// mount PVC root as HERMES_HOME so bootstrap writes config.yaml to the right place.
+	values["command"] = []any{}
+	values["args"] = []any{}
+
+	values["podSecurityContext"] = map[string]any{
+		"runAsNonRoot":        true,
+		"runAsUser":           int64(1024),
+		"runAsGroup":          int64(1024),
+		"fsGroup":             int64(1024),
+		"fsGroupChangePolicy": "OnRootMismatch",
+	}
+	values["securityContext"] = map[string]any{
+		"allowPrivilegeEscalation": false,
+		"readOnlyRootFilesystem":   false, // hermes-webui venv writes to /opt/hermes-webui
+		"capabilities": map[string]any{
+			"drop": []any{"ALL"},
+		},
+	}
+
+	// PVC root = HERMES_HOME so the bootstrap-config init container writes
+	// config.yaml directly to /home/hermeswebui/.hermes/config.yaml on the PVC.
+	values["persistence"].(map[string]any)["mountPath"] = "/home/hermeswebui/.hermes"
+
+	// /workspace is a subPath so both dirs share one PVC claim.
+	values["extraVolumeMounts"] = []any{
+		map[string]any{"name": "data", "mountPath": "/workspace", "subPath": "workspace"},
+	}
+
+	// Create the workspace subdir before the subPath mount binds.
+	values["extraInitContainers"] = []any{
+		map[string]any{
+			"name":    "init-dirs",
+			"image":   "busybox:1.36",
+			"command": []any{"sh", "-c", "mkdir -p /mnt/workspace /mnt/webui /mnt/bin /mnt/cache/pip /mnt/cache/npm /mnt/python /mnt/npm /mnt/pnpm"},
+			"volumeMounts": []any{map[string]any{
+				"name": "data", "mountPath": "/mnt",
+			}},
+		},
+	}
+
+	// HOME overrides the chart's "$mountPath/home" default.
+	// HERMES_WEBUI_AGENT_DIR points to the agent baked into the image, not the PVC.
+	h := "/home/hermeswebui/.hermes"
+	rncEnv := map[string]string{
+		"HERMES_WEBUI_HOST":              "0.0.0.0",
+		"HERMES_WEBUI_PORT":              strconv.Itoa(spec.RuntimePort),
+		"HERMES_WEBUI_STATE_DIR":         h + "/webui",
+		"HERMES_WEBUI_DEFAULT_WORKSPACE": "/workspace",
+		"HERMES_WEBUI_AGENT_DIR":         "/opt/hermes-agent",
+		"HOME":                           "/home/hermeswebui",
+		"HERMES_HOME":                    h,
+		"HERMES_SKIP_SETUP":              "1",
+		"HERMES_EXEC_ASK":                "false",
+		"PATH":            h + "/bin:/home/hermeswebui/.local/bin:/opt/hermes-webui/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+		"GH_CONFIG_DIR":   h + "/gh",
+		"XDG_CONFIG_HOME": h + "/.config",
+		"PYTHONUSERBASE":  h + "/python",
+		"PIP_CACHE_DIR":   h + "/cache/pip",
+		"PIPX_HOME":       h + "/pipx",
+		"PIPX_BIN_DIR":    h + "/bin",
+		"UV_CACHE_DIR":    h + "/cache/uv",
+		"UV_TOOL_DIR":     h + "/uv/tools",
+		"UV_TOOL_BIN_DIR": h + "/bin",
+		"NPM_CONFIG_PREFIX": h + "/npm",
+		"NPM_CONFIG_CACHE":  h + "/cache/npm",
+		"PNPM_HOME":         h + "/pnpm",
+		"YARN_GLOBAL_FOLDER": h + "/yarn/global",
+		"YARN_CACHE_FOLDER":  h + "/cache/yarn",
+		"COREPACK_HOME":      h + "/corepack",
+		"BUN_INSTALL":        h + "/bun",
+		"DENO_INSTALL":       h + "/deno",
+		"CARGO_HOME":         h + "/cargo",
+		"RUSTUP_HOME":        h + "/rustup",
+		"GOPATH":             h + "/go",
+		"GOBIN":              h + "/bin",
+		"GEM_HOME":           h + "/gem",
+		"GEM_PATH":           h + "/gem",
+		"COMPOSER_HOME":      h + "/composer",
+		"DOTNET_CLI_HOME":    h + "/dotnet",
+	}
+	for k, v := range rncEnv {
+		if _, exists := spec.EnvMap[k]; !exists {
+			spec.EnvMap[k] = v
+		}
+	}
+	values["env"] = spec.EnvMap
+
 	return values, nil
 }
 
-func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, namespace, clusterName string) (WorkspaceSpec, error) {
+func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, namespace, clusterName string) (InstanceSpec, error) {
 	bridgeValues, _ := values["bridge"].(map[string]any)
 	workspaceValues, _ := bridgeValues["workspace"].(map[string]any)
 	if len(workspaceValues) == 0 {
-		return WorkspaceSpec{}, fmt.Errorf("release is missing bridge.workspace metadata")
+		return InstanceSpec{}, fmt.Errorf("release is missing bridge.workspace metadata")
 	}
 
-	spec := WorkspaceSpec{
-		WorkspaceID: workspaceString(workspaceValues, "workspaceId", defaultWorkspaceID),
+	spec := InstanceSpec{
+		InstanceID: workspaceString(workspaceValues, "workspaceId", defaultWorkspaceID),
 		TenantID:    workspaceString(workspaceValues, "tenantId", ""),
 		ClusterID:   workspaceString(workspaceValues, "clusterId", clusterName),
 		Namespace:   workspaceString(workspaceValues, "namespace", namespace),
@@ -523,9 +604,19 @@ func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, 
 			HealthPath:       nestedString(workspaceValues, "network", "healthPath"),
 		},
 		HealthCheckPath: workspaceString(workspaceValues, "healthCheckPath", ""),
+		RuntimeMode:     workspaceString(workspaceValues, "runtimeMode", ""),
 	}
-	if spec.WorkspaceID == "" {
-		spec.WorkspaceID = defaultWorkspaceID
+	// Restore RuntimePort — JSON numbers unmarshal as float64.
+	if portRaw, ok := workspaceValues["runtimePort"]; ok {
+		switch v := portRaw.(type) {
+		case float64:
+			spec.RuntimePort = int(v)
+		case int:
+			spec.RuntimePort = v
+		}
+	}
+	if spec.InstanceID == "" {
+		spec.InstanceID = defaultWorkspaceID
 	}
 	if spec.ClusterID == "" {
 		spec.ClusterID = clusterName
@@ -533,25 +624,31 @@ func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, 
 	if spec.Namespace == "" {
 		spec.Namespace = namespace
 	}
+	if spec.RuntimePort == 0 {
+		spec.RuntimePort = 8787
+	}
+	// Restore secret key names from extraSecretKeys so any UpdateWorkspace caller
+	// preserves existing secretKeyRef entries without explicit secretKeysFromRelease calls.
+	spec.Secrets = secretKeysFromRelease(values)
 	return spec, nil
 }
 
-func (b *Bridge) getWorkspaceStatusFromRelease(ctx context.Context, rel *release.Release, spec WorkspaceSpec) (WorkspaceStatus, error) {
-	status, err := b.collectWorkspaceStatus(ctx, spec, rel.Name, rel.Info.FirstDeployed.Time)
+func (b *Bridge) getWorkspaceStatusFromRelease(ctx context.Context, rel *release.Release, spec InstanceSpec) (InstanceStatus, error) {
+	status, err := b.collectInstanceStatus(ctx, spec, rel.Name, rel.Info.FirstDeployed.Time)
 	if err != nil {
-		return WorkspaceStatus{}, err
+		return InstanceStatus{}, err
 	}
 	return status, nil
 }
 
-// buildSecrets converts the spec's string secrets map to the any-typed map Helm values expect.
-// API_SERVER_KEY must always be present — handler ensures it on create; backend must re-send on update.
-func buildSecrets(provided map[string]string) map[string]any {
-	out := map[string]any{}
-	for k, v := range provided {
-		out[k] = v
+// buildExtraSecretKeys returns env var → secret-data-key pairs for all keys in the
+// bridge-owned workspace Secret. The chart renders each as a secretKeyRef env var.
+func buildExtraSecretKeys(provided map[string]string) map[string]string {
+	extra := map[string]string{}
+	for k := range provided {
+		extra[k] = k
 	}
-	return out
+	return extra
 }
 
 func randomHex(n int) string {
@@ -601,7 +698,7 @@ func nestedString(values map[string]any, parent, key string) string {
 	return workspaceString(child, key, "")
 }
 
-func (s WorkspaceSpec) ingressEnabled() bool {
+func (s InstanceSpec) ingressEnabled() bool {
 	if s.IngressEnabled != nil {
 		return *s.IngressEnabled
 	}
@@ -625,33 +722,35 @@ func (n NetworkSpec) path() string {
 	return "/" + n.Path
 }
 
-func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
-	spec.WorkspaceID = strings.TrimSpace(spec.WorkspaceID)
+func (b *Bridge) normalizeInstanceSpec(spec InstanceSpec) InstanceSpec {
+	spec.InstanceID = strings.TrimSpace(spec.InstanceID)
 	if spec.ClusterID == "" {
 		spec.ClusterID = b.ClusterName
 	}
-	// Default image to the official Hermes agent.
+	spec.RuntimeMode = "runtime-node-core"
 	if strings.TrimSpace(spec.Image) == "" {
-		spec.Image = "nousresearch/hermes-agent"
+		spec.Image = b.Config.RuntimeNodeCoreImage
 	}
-	// Default tag to "latest" only when the caller didn't embed a tag in the image
-	// reference (e.g. "image:v1.2") and didn't set ImageTag explicitly.
+	// Default tag from config when not embedded in the image reference.
 	if strings.TrimSpace(spec.ImageTag) == "" {
 		_, embeddedTag := splitImageReference(spec.Image)
-		if embeddedTag == "" {
-			spec.ImageTag = "latest"
+		if embeddedTag == "" && !strings.Contains(spec.Image, "@sha256:") {
+			spec.ImageTag = b.Config.RuntimeNodeCoreImageTag
 		}
+	}
+	if spec.RuntimePort == 0 {
+		spec.RuntimePort = 8787
 	}
 	// Default namespace to the workspace ID (one namespace per tenant).
 	if spec.Namespace == "" {
-		if spec.WorkspaceID != "" {
-			spec.Namespace = spec.WorkspaceID
+		if spec.InstanceID != "" {
+			spec.Namespace = spec.InstanceID
 		} else {
 			spec.Namespace = b.Config.Namespace
 		}
 	}
 	// Auto-create namespace when it's isolated per workspace.
-	if !spec.CreateNamespace && spec.Namespace == spec.WorkspaceID {
+	if !spec.CreateNamespace && spec.Namespace == spec.InstanceID {
 		spec.CreateNamespace = true
 	}
 	if spec.HealthCheckPath == "" {
@@ -664,8 +763,17 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 		spec.Network.Scheme = "https"
 	}
 	// Derive host from workspaceID + default domain when not explicitly set.
+	// host() combines Subdomain + Host, so Host must be just the base domain.
+	// If caller passed a full hostname in Host with no Subdomain, leave it alone.
 	if spec.Network.Host == "" && strings.TrimSpace(b.Config.DefaultDomain) != "" {
-		spec.Network.Host = spec.WorkspaceID + "." + b.Config.DefaultDomain
+		if spec.Network.Subdomain != "" {
+			// Caller set a subdomain — use the bare domain as Host.
+			spec.Network.Host = b.Config.DefaultDomain
+		} else {
+			// No subdomain — default subdomain to workspaceID, Host to domain.
+			spec.Network.Subdomain = spec.InstanceID
+			spec.Network.Host = b.Config.DefaultDomain
+		}
 	}
 	// Default ingress to enabled whenever a host is configured.
 	if spec.IngressEnabled == nil && spec.Network.Host != "" {
@@ -679,7 +787,7 @@ func (b *Bridge) normalizeWorkspaceSpec(spec WorkspaceSpec) WorkspaceSpec {
 	if spec.EnvMap == nil {
 		spec.EnvMap = map[string]string{}
 	}
-	spec.EnvMap["WORKSPACE_ID"] = spec.WorkspaceID
+	spec.EnvMap["WORKSPACE_ID"] = spec.InstanceID
 	spec.EnvMap["TENANT_ID"] = spec.TenantID
 	if spec.Plan != "" {
 		spec.EnvMap["PLAN"] = spec.Plan
