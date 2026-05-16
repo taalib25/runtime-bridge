@@ -2,8 +2,8 @@ package main
 
 import "time"
 
-type WorkspaceSpec struct {
-	WorkspaceID     string            `json:"workspaceId"`
+type InstanceSpec struct {
+	InstanceID string `json:"instanceId"`
 	TenantID        string            `json:"tenantId"`
 	ClusterID       string            `json:"clusterId,omitempty"`
 	Namespace       string            `json:"namespace,omitempty"`
@@ -285,8 +285,8 @@ type EnvVar struct {
 
 // ─── API response types ───────────────────────────────────────────────────────
 
-type WorkspaceStatus struct {
-	WorkspaceID      string        `json:"workspaceId"`
+type InstanceStatus struct {
+	InstanceID string `json:"instanceId"`
 	ClusterID        string        `json:"clusterId"`
 	ReleaseName      string        `json:"releaseName"`
 	Namespace        string        `json:"namespace"`
@@ -309,18 +309,18 @@ type WorkspaceStatus struct {
 	RestartCount  int32     `json:"restartCount,omitempty"`
 	CreatedAt     time.Time `json:"createdAt,omitempty"`
 	LastCheckedAt time.Time `json:"lastCheckedAt,omitempty"`
-	Spec          WorkspaceSpec `json:"spec,omitempty"`
+	Spec InstanceSpec `json:"spec,omitempty"`
 }
 
-type Workspace struct {
-	Spec   WorkspaceSpec   `json:"spec"`
-	Status WorkspaceStatus `json:"status"`
+type Instance struct {
+	Spec   InstanceSpec   `json:"spec"`
+	Status InstanceStatus `json:"status"`
 }
 
 type Operation struct {
 	ID          string     `json:"id"`
 	Type        string     `json:"type"`
-	WorkspaceID string     `json:"workspaceId"`
+	InstanceID string `json:"instanceId"`
 	Status      string     `json:"status"`
 	Message     string     `json:"message,omitempty"`
 	Error       string     `json:"error,omitempty"`

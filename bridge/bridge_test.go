@@ -38,7 +38,7 @@ func newTestBridge(secret string) *Bridge {
 func TestAuthMiddleware_MissingSecret(t *testing.T) {
 	b := newTestBridge("mysecret")
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/workspaces", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/instances", nil)
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
@@ -48,7 +48,7 @@ func TestAuthMiddleware_MissingSecret(t *testing.T) {
 func TestAuthMiddleware_WrongSecret(t *testing.T) {
 	b := newTestBridge("mysecret")
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/workspaces", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/instances", nil)
 	req.Header.Set("X-Bridge-Secret", "wrongsecret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
@@ -82,16 +82,16 @@ func TestHealthz(t *testing.T) {
 
 const testWID = "ws-1234567890abcdef"
 
-func TestDecodeWorkspaceRequest_Valid(t *testing.T) {
+func TestDecodeInstanceRequest_Valid(t *testing.T) {
 	b := newTestBridge("s")
 	payload := `{"tenantId":"t1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	spec, err := b.decodeWorkspaceRequest(req, testWID)
+	spec, err := b.decodeInstanceRequest(req, testWID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if spec.WorkspaceID != testWID {
-		t.Errorf("expected workspaceId=%s, got %q", testWID, spec.WorkspaceID)
+	if spec.InstanceID != testWID {
+		t.Errorf("expected workspaceId=%s, got %q", testWID, spec.InstanceID)
 	}
 	if spec.TenantID != "t1" {
 		t.Errorf("expected tenantId=t1, got %q", spec.TenantID)
@@ -102,21 +102,21 @@ func TestDecodeWorkspaceRequest_Valid(t *testing.T) {
 	}
 }
 
-func TestDecodeWorkspaceRequest_MissingTenantID(t *testing.T) {
+func TestDecodeInstanceRequest_MissingTenantID(t *testing.T) {
 	b := newTestBridge("s")
 	payload := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeWorkspaceRequest(req, testWID)
+	_, err := b.decodeInstanceRequest(req, testWID)
 	if err == nil || !strings.Contains(err.Error(), "tenantId") {
 		t.Fatalf("expected tenantId error, got %v", err)
 	}
 }
 
-func TestDecodeWorkspaceRequest_ImageOptional(t *testing.T) {
+func TestDecodeInstanceRequest_ImageOptional(t *testing.T) {
 	b := newTestBridge("s")
 	payload := `{"tenantId":"t1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	spec, err := b.decodeWorkspaceRequest(req, testWID)
+	spec, err := b.decodeInstanceRequest(req, testWID)
 	if err != nil {
 		t.Fatalf("image should be optional, got error: %v", err)
 	}
@@ -125,31 +125,32 @@ func TestDecodeWorkspaceRequest_ImageOptional(t *testing.T) {
 	}
 }
 
-func TestDecodeWorkspaceRequest_WorkspaceIDMismatch(t *testing.T) {
+func TestDecodeInstanceRequest_WorkspaceIDMismatch(t *testing.T) {
 	b := newTestBridge("s")
-	payload := `{"workspaceId":"ws-ffffffffffffffff","tenantId":"t1"}`
+	payload := `{"instanceId":"ws-ffffffffffffffff","tenantId":"t1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeWorkspaceRequest(req, testWID)
+	_, err := b.decodeInstanceRequest(req, testWID)
 	if err == nil {
 		t.Fatal("expected mismatch error")
 	}
 }
 
-func TestDecodeWorkspaceRequest_InvalidWorkspaceIDFormat(t *testing.T) {
+func TestDecodeInstanceRequest_InvalidInstanceIDFormat(t *testing.T) {
 	b := newTestBridge("s")
 	payload := `{"tenantId":"t1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeWorkspaceRequest(req, "ws-1")
-	if err == nil || !strings.Contains(err.Error(), "workspaceId") {
-		t.Fatalf("expected workspaceId format error, got %v", err)
+	// IDs with uppercase letters or spaces are not valid k8s names.
+	_, err := b.decodeInstanceRequest(req, "INVALID ID!")
+	if err == nil || !strings.Contains(err.Error(), "instanceId") {
+		t.Fatalf("expected instanceId format error, got %v", err)
 	}
 }
 
-func TestDecodeWorkspaceRequest_InvalidPlan(t *testing.T) {
+func TestDecodeInstanceRequest_InvalidPlan(t *testing.T) {
 	b := newTestBridge("s")
 	payload := `{"tenantId":"t1","plan":"premium"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeWorkspaceRequest(req, testWID)
+	_, err := b.decodeInstanceRequest(req, testWID)
 	if err == nil || !strings.Contains(err.Error(), "plan") {
 		t.Fatalf("expected plan error, got %v", err)
 	}
@@ -157,20 +158,20 @@ func TestDecodeWorkspaceRequest_InvalidPlan(t *testing.T) {
 
 // --- Handler responses (no k8s, so list/get return errors) ---
 
-func TestHandleListWorkspaces_AuthRequired(t *testing.T) {
+func TestHandleListInstances_AuthRequired(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/workspaces", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/instances", nil)
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)
 	}
 }
 
-func TestHandleCreateWorkspace_BadBody(t *testing.T) {
+func TestHandleCreateInstance_BadBody(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/workspaces/ws-1", bytes.NewBufferString("{invalid json}"))
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/ws-1", bytes.NewBufferString("{invalid json}"))
 	req.Header.Set("X-Bridge-Secret", "secret")
 	req.Header.Set("Content-Type", "application/json")
 	b.Router().ServeHTTP(rr, req)
@@ -196,19 +197,19 @@ func TestReleaseName_WithPrefix(t *testing.T) {
 	}
 }
 
-func TestWorkspaceNamespace_FromSpec(t *testing.T) {
+func TestInstanceNamespace_FromSpec(t *testing.T) {
 	b := newTestBridge("s")
 	b.Config.Namespace = "default"
-	spec := WorkspaceSpec{Namespace: "tenant-ns"}
+	spec := InstanceSpec{Namespace: "tenant-ns"}
 	if got := b.workspaceNamespace(spec); got != "tenant-ns" {
 		t.Errorf("expected tenant-ns, got %s", got)
 	}
 }
 
-func TestWorkspaceNamespace_FallbackToConfig(t *testing.T) {
+func TestInstanceNamespace_FallbackToConfig(t *testing.T) {
 	b := newTestBridge("s")
 	b.Config.Namespace = "default"
-	spec := WorkspaceSpec{}
+	spec := InstanceSpec{}
 	if got := b.workspaceNamespace(spec); got != "default" {
 		t.Errorf("expected default, got %s", got)
 	}
@@ -218,8 +219,8 @@ func TestWorkspaceNamespace_FallbackToConfig(t *testing.T) {
 
 func TestBuildValues_ImageSplitWithTag(t *testing.T) {
 	b := newTestBridge("s")
-	spec := WorkspaceSpec{
-		WorkspaceID: "ws-1",
+	spec := InstanceSpec{
+		InstanceID: "ws-1",
 		TenantID:    "t1",
 		Image:       "nousresearch/hermes-agent:v2026.4.16",
 	}
@@ -238,8 +239,8 @@ func TestBuildValues_ImageSplitWithTag(t *testing.T) {
 
 func TestBuildValues_ImageTagOverride(t *testing.T) {
 	b := newTestBridge("s")
-	spec := WorkspaceSpec{
-		WorkspaceID: "ws-1",
+	spec := InstanceSpec{
+		InstanceID: "ws-1",
 		TenantID:    "t1",
 		Image:       "nousresearch/hermes-agent",
 		ImageTag:    "latest",
@@ -257,8 +258,8 @@ func TestBuildValues_ImageTagOverride(t *testing.T) {
 func TestBuildValues_IngressEnabled(t *testing.T) {
 	b := newTestBridge("s")
 	enabled := true
-	spec := WorkspaceSpec{
-		WorkspaceID:    "ws-1",
+	spec := InstanceSpec{
+		InstanceID:    "ws-1",
 		TenantID:       "t1",
 		Image:          "img",
 		IngressEnabled: &enabled,
@@ -276,8 +277,8 @@ func TestBuildValues_IngressEnabled(t *testing.T) {
 
 func TestBuildValues_ResourcesSetCorrectly(t *testing.T) {
 	b := newTestBridge("s")
-	spec := WorkspaceSpec{
-		WorkspaceID: "ws-1",
+	spec := InstanceSpec{
+		InstanceID: "ws-1",
 		TenantID:    "t1",
 		Image:       "img",
 		Resources: ResourceSpec{

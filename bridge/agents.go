@@ -150,7 +150,7 @@ func (b *Bridge) ApplyAgentTemplate(ctx context.Context, workspaceID, agentID st
 	}
 	spec.OverwriteConfig = true
 
-	if _, err := b.UpdateWorkspace(ctx, spec); err != nil {
+	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
 
@@ -170,14 +170,14 @@ func (b *Bridge) ApplyAgentTemplate(ctx context.Context, workspaceID, agentID st
 
 // GetWorkspaceAgent returns the agent template currently applied to the workspace,
 // or nil if no template has been applied.
-func (b *Bridge) GetWorkspaceAgent(ctx context.Context, workspaceID string) (*AgentTemplate, error) {
+func (b *Bridge) GetInstanceAgent(ctx context.Context, workspaceID string) (*AgentTemplate, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	ns, err := b.KubeClient.CoreV1().Namespaces().Get(ctx, rel.Namespace, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("get workspace namespace: %w", err)
+		return nil, fmt.Errorf("get instance namespace: %w", err)
 	}
 	agentID := ns.Annotations[appliedTemplateAnnotation]
 	if agentID == "" {
