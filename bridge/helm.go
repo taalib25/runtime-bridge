@@ -19,7 +19,7 @@ import (
 
 func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*release.Release, error) {
 	started := time.Now()
-	b.Logger.Printf("[CreateInstance] Starting for workspace %s, tenant %s", spec.InstanceID, spec.TenantID)
+	b.Logger.Printf("[CreateInstance] Starting for instance %s, tenant %s", spec.InstanceID, spec.TenantID)
 
 	chart, err := loader.Load(b.ChartPath)
 	if err != nil {
@@ -195,7 +195,7 @@ func (b *Bridge) DeleteInstance(ctx context.Context, workspaceID string) error {
 	if mwErr := b.DeleteCORSMiddleware(ctx, workspaceID); mwErr != nil {
 		b.Logger.Printf("[DeleteInstance] Warning: failed to delete CORS middleware: %v", mwErr)
 	}
-	b.Metrics.WorkspaceHealth.DeleteLabelValues(b.ClusterName, workspaceID)
+	b.Metrics.InstanceHealth.DeleteLabelValues(b.ClusterName, workspaceID)
 	b.trackOperation("delete", "success", started)
 	b.Logger.Printf("[DeleteInstance] Deleted release %s (namespace preserved with tombstone + helm history)", workspaceID)
 	return nil
@@ -323,7 +323,7 @@ func (b *Bridge) ListInstances(ctx context.Context) ([]InstanceStatus, error) {
 		return statuses[i].InstanceID < statuses[j].InstanceID
 	})
 	b.Logger.Printf("[ListInstances] Returning %d valid workspaces", len(statuses))
-	b.Metrics.WorkspaceCount.WithLabelValues(b.ClusterName).Set(float64(len(statuses)))
+	b.Metrics.InstanceCount.WithLabelValues(b.ClusterName).Set(float64(len(statuses)))
 	return statuses, nil
 }
 
@@ -399,7 +399,7 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"ingress": map[string]any{
 			"enabled": spec.ingressEnabled(),
 		},
-		"bridge":       map[string]any{"workspace": spec},
+		"bridge":       map[string]any{"instance": spec},
 		"nodeSelector": spec.NodeSelector,
 		"tolerations":  spec.Tolerations,
 	}
@@ -507,17 +507,17 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 	// config.yaml directly to /home/hermeswebui/.hermes/config.yaml on the PVC.
 	values["persistence"].(map[string]any)["mountPath"] = "/home/hermeswebui/.hermes"
 
-	// /workspace is a subPath so both dirs share one PVC claim.
+	// /instance is a subPath so both dirs share one PVC claim.
 	values["extraVolumeMounts"] = []any{
-		map[string]any{"name": "data", "mountPath": "/workspace", "subPath": "workspace"},
+		map[string]any{"name": "data", "mountPath": "/instance", "subPath": "instance"},
 	}
 
-	// Create the workspace subdir before the subPath mount binds.
+	// Create the instance subdir before the subPath mount binds.
 	values["extraInitContainers"] = []any{
 		map[string]any{
 			"name":    "init-dirs",
 			"image":   "busybox:1.36",
-			"command": []any{"sh", "-c", "mkdir -p /mnt/workspace /mnt/webui /mnt/bin /mnt/cache/pip /mnt/cache/npm /mnt/python /mnt/npm /mnt/pnpm"},
+			"command": []any{"sh", "-c", "mkdir -p /mnt/instance /mnt/webui /mnt/bin /mnt/cache/pip /mnt/cache/npm /mnt/python /mnt/npm /mnt/pnpm"},
 			"volumeMounts": []any{map[string]any{
 				"name": "data", "mountPath": "/mnt",
 			}},
@@ -531,7 +531,7 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"HERMES_WEBUI_HOST":              "0.0.0.0",
 		"HERMES_WEBUI_PORT":              strconv.Itoa(spec.RuntimePort),
 		"HERMES_WEBUI_STATE_DIR":         h + "/webui",
-		"HERMES_WEBUI_DEFAULT_WORKSPACE": "/workspace",
+		"HERMES_WEBUI_DEFAULT_WORKSPACE": "/instance",
 		"HERMES_WEBUI_AGENT_DIR":         "/opt/hermes-agent",
 		"HOME":                           "/home/hermeswebui",
 		"HERMES_HOME":                    h,
@@ -574,43 +574,43 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 	return values, nil
 }
 
-func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, namespace, clusterName string) (InstanceSpec, error) {
+func workspaceSpecFromRelease(defaultInstanceID string, values map[string]any, namespace, clusterName string) (InstanceSpec, error) {
 	bridgeValues, _ := values["bridge"].(map[string]any)
-	workspaceValues, _ := bridgeValues["workspace"].(map[string]any)
-	if len(workspaceValues) == 0 {
-		return InstanceSpec{}, fmt.Errorf("release is missing bridge.workspace metadata")
+	instanceValues, _ := bridgeValues["instance"].(map[string]any)
+	if len(instanceValues) == 0 {
+		return InstanceSpec{}, fmt.Errorf("release is missing bridge.instance metadata")
 	}
 
 	spec := InstanceSpec{
-		InstanceID: workspaceString(workspaceValues, "workspaceId", defaultWorkspaceID),
-		TenantID:    workspaceString(workspaceValues, "tenantId", ""),
-		ClusterID:   workspaceString(workspaceValues, "clusterId", clusterName),
-		Namespace:   workspaceString(workspaceValues, "namespace", namespace),
-		Image:       workspaceString(workspaceValues, "image", ""),
-		ImageTag:    workspaceString(workspaceValues, "imageTag", ""),
+		InstanceID: workspaceString(instanceValues, "instanceId", defaultInstanceID),
+		TenantID:    workspaceString(instanceValues, "tenantId", ""),
+		ClusterID:   workspaceString(instanceValues, "clusterId", clusterName),
+		Namespace:   workspaceString(instanceValues, "namespace", namespace),
+		Image:       workspaceString(instanceValues, "image", ""),
+		ImageTag:    workspaceString(instanceValues, "imageTag", ""),
 		Resources: ResourceSpec{
-			CPURequest:    nestedString(workspaceValues, "resources", "cpuRequest"),
-			CPULimit:      nestedString(workspaceValues, "resources", "cpuLimit"),
-			MemoryRequest: nestedString(workspaceValues, "resources", "memoryRequest"),
-			MemoryLimit:   nestedString(workspaceValues, "resources", "memoryLimit"),
+			CPURequest:    nestedString(instanceValues, "resources", "cpuRequest"),
+			CPULimit:      nestedString(instanceValues, "resources", "cpuLimit"),
+			MemoryRequest: nestedString(instanceValues, "resources", "memoryRequest"),
+			MemoryLimit:   nestedString(instanceValues, "resources", "memoryLimit"),
 		},
 		Storage: StorageSpec{
-			Size:         nestedString(workspaceValues, "storage", "size"),
-			StorageClass: nestedString(workspaceValues, "storage", "storageClass"),
+			Size:         nestedString(instanceValues, "storage", "size"),
+			StorageClass: nestedString(instanceValues, "storage", "storageClass"),
 		},
 		Network: NetworkSpec{
-			Host:             nestedString(workspaceValues, "network", "host"),
-			Path:             nestedString(workspaceValues, "network", "path"),
-			Subdomain:        nestedString(workspaceValues, "network", "subdomain"),
-			IngressClassName: nestedString(workspaceValues, "network", "ingressClassName"),
-			Scheme:           nestedString(workspaceValues, "network", "scheme"),
-			HealthPath:       nestedString(workspaceValues, "network", "healthPath"),
+			Host:             nestedString(instanceValues, "network", "host"),
+			Path:             nestedString(instanceValues, "network", "path"),
+			Subdomain:        nestedString(instanceValues, "network", "subdomain"),
+			IngressClassName: nestedString(instanceValues, "network", "ingressClassName"),
+			Scheme:           nestedString(instanceValues, "network", "scheme"),
+			HealthPath:       nestedString(instanceValues, "network", "healthPath"),
 		},
-		HealthCheckPath: workspaceString(workspaceValues, "healthCheckPath", ""),
-		RuntimeMode:     workspaceString(workspaceValues, "runtimeMode", ""),
+		HealthCheckPath: workspaceString(instanceValues, "healthCheckPath", ""),
+		RuntimeMode:     workspaceString(instanceValues, "runtimeMode", ""),
 	}
 	// Restore RuntimePort — JSON numbers unmarshal as float64.
-	if portRaw, ok := workspaceValues["runtimePort"]; ok {
+	if portRaw, ok := instanceValues["runtimePort"]; ok {
 		switch v := portRaw.(type) {
 		case float64:
 			spec.RuntimePort = int(v)
@@ -619,7 +619,7 @@ func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, 
 		}
 	}
 	if spec.InstanceID == "" {
-		spec.InstanceID = defaultWorkspaceID
+		spec.InstanceID = defaultInstanceID
 	}
 	if spec.ClusterID == "" {
 		spec.ClusterID = clusterName

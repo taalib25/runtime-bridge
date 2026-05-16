@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	forwardAuthMiddlewareName = "workspace-auth"
-	corsMiddlewareName        = "workspace-cors"
+	forwardAuthMiddlewareName = "instance-auth"
+	corsMiddlewareName        = "instance-cors"
 )
 
 // traefikMiddlewareGVRs lists Traefik Middleware CRD locations to try in order.
