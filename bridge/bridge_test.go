@@ -139,9 +139,10 @@ func TestDecodeInstanceRequest_InvalidInstanceIDFormat(t *testing.T) {
 	b := newTestBridge("s")
 	payload := `{"tenantId":"t1"}`
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeInstanceRequest(req, "ws-1")
+	// IDs with uppercase letters or spaces are not valid k8s names.
+	_, err := b.decodeInstanceRequest(req, "INVALID ID!")
 	if err == nil || !strings.Contains(err.Error(), "instanceId") {
-		t.Fatalf("expected workspaceId format error, got %v", err)
+		t.Fatalf("expected instanceId format error, got %v", err)
 	}
 }
 

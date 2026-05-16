@@ -14,9 +14,10 @@ import (
 	"github.com/gorilla/mux"
 )
 
-var wsIDPattern = regexp.MustCompile(`^ws-[0-9a-f]{16}$`)
+// k8sNamePattern matches valid Kubernetes resource names (RFC 1123 DNS label).
+var k8sNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`)
 
-func validInstanceID(id string) bool { return wsIDPattern.MatchString(id) }
+func validInstanceID(id string) bool { return k8sNamePattern.MatchString(id) }
 
 func (b *Bridge) handleListInstances(w http.ResponseWriter, r *http.Request) {
 	instances, err := b.ListInstances(r.Context())
