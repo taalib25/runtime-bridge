@@ -8,11 +8,11 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// handleGetInstanceProviders GET /v1/workspaces/{id}/config/providers
+// handleGetInstanceProviders GET /v1/instances/{id}/config/providers
 func (b *Bridge) handleGetInstanceProviders(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	providers, err := b.GetInstanceProviders(r.Context(), workspaceID)
@@ -27,11 +27,11 @@ func (b *Bridge) handleGetInstanceProviders(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
 }
 
-// handleSetInstanceProvider POST /v1/workspaces/{id}/config/providers
+// handleSetInstanceProvider POST /v1/instances/{id}/config/providers
 func (b *Bridge) handleSetInstanceProvider(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	var req ProviderConfigRequest
@@ -58,13 +58,13 @@ func (b *Bridge) handleSetInstanceProvider(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"provider": req.Provider, "status": "updated"})
 }
 
-// handleUpdateInstanceProvider PUT /v1/workspaces/{id}/config/providers/{name}
+// handleUpdateInstanceProvider PUT /v1/instances/{id}/config/providers/{name}
 func (b *Bridge) handleUpdateInstanceProvider(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	workspaceID := vars["id"]
 	providerName := vars["name"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	var req ProviderConfigRequest
@@ -88,13 +88,13 @@ func (b *Bridge) handleUpdateInstanceProvider(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]any{"provider": providerName, "status": "updated"})
 }
 
-// handleDeleteInstanceProvider DELETE /v1/workspaces/{id}/config/providers/{name}
+// handleDeleteInstanceProvider DELETE /v1/instances/{id}/config/providers/{name}
 func (b *Bridge) handleDeleteInstanceProvider(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	workspaceID := vars["id"]
 	providerName := vars["name"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	if err := b.DeleteInstanceProvider(r.Context(), workspaceID, providerName); err != nil {
@@ -108,11 +108,11 @@ func (b *Bridge) handleDeleteInstanceProvider(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, map[string]any{"provider": providerName, "status": "removed"})
 }
 
-// handleSetInstanceModel PUT /v1/workspaces/{id}/config/model
+// handleSetInstanceModel PUT /v1/instances/{id}/config/model
 func (b *Bridge) handleSetInstanceModel(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	var req SetModelRequest

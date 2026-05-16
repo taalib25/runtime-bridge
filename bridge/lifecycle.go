@@ -175,7 +175,7 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 	return "none", nil
 }
 
-// GetWorkspaceEvents returns the 50 most recent Kubernetes events for resources
+// GetInstanceEvents returns the 50 most recent Kubernetes events for resources
 // belonging to this workspace release (deployment, pods, PVCs, service).
 func (b *Bridge) GetInstanceEvents(ctx context.Context, workspaceID string) ([]InstanceEvent, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
