@@ -2,9 +2,9 @@ name: Bridge CI/CD
 
 on:
   push:
-    branches: [main, go-bridge]
+    branches: [main]
   pull_request:
-    branches: [main, go-bridge]
+    branches: [main]
 
 jobs:
   # ── Phase 1: Unit tests + lint (runs on every PR and push) ──────────────────
