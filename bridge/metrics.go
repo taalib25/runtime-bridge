@@ -3,10 +3,10 @@ package main
 import "github.com/prometheus/client_golang/prometheus"
 
 type Metrics struct {
-	WorkspaceCount   *prometheus.GaugeVec
+	InstanceCount   *prometheus.GaugeVec
 	OperationLatency *prometheus.HistogramVec
 	OperationResults *prometheus.CounterVec
-	WorkspaceHealth  *prometheus.GaugeVec
+	InstanceHealth  *prometheus.GaugeVec
 	HTTPRequests     *prometheus.CounterVec
 	HTTPDuration     *prometheus.HistogramVec
 }
@@ -17,7 +17,7 @@ func NewMetrics(clusterName string, registerer prometheus.Registerer) *Metrics {
 	}
 
 	m := &Metrics{
-		WorkspaceCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		InstanceCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "hermes_bridge",
 			Name:      "workspace_count",
 			Help:      "Number of Helm-managed workspaces visible to the bridge",
@@ -33,7 +33,7 @@ func NewMetrics(clusterName string, registerer prometheus.Registerer) *Metrics {
 			Name:      "operation_total",
 			Help:      "Total workspace operations grouped by result",
 		}, []string{"cluster", "operation", "result"}),
-		WorkspaceHealth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		InstanceHealth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "hermes_bridge",
 			Name:      "workspace_health",
 			Help:      "Workspace HTTP health check result (1=healthy, 0=unhealthy)",
@@ -52,9 +52,9 @@ func NewMetrics(clusterName string, registerer prometheus.Registerer) *Metrics {
 	}
 
 	registerer.MustRegister(
-		m.WorkspaceCount, m.OperationLatency, m.OperationResults,
-		m.WorkspaceHealth, m.HTTPRequests, m.HTTPDuration,
+		m.InstanceCount, m.OperationLatency, m.OperationResults,
+		m.InstanceHealth, m.HTTPRequests, m.HTTPDuration,
 	)
-	m.WorkspaceCount.WithLabelValues(clusterName).Set(0)
+	m.InstanceCount.WithLabelValues(clusterName).Set(0)
 	return m
 }

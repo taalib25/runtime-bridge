@@ -19,12 +19,12 @@ var wsIDPattern = regexp.MustCompile(`^ws-[0-9a-f]{16}$`)
 func validInstanceID(id string) bool { return wsIDPattern.MatchString(id) }
 
 func (b *Bridge) handleListInstances(w http.ResponseWriter, r *http.Request) {
-	workspaces, err := b.ListInstances(r.Context())
+	instances, err := b.ListInstances(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": workspaces})
+	writeJSON(w, http.StatusOK, map[string]any{"items": instances})
 }
 
 func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +36,7 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Throttle: if a create is already in-flight for this workspace, return the
+	// Throttle: if a create is already in-flight for this instance, return the
 	// existing key immediately without launching another Helm install.
 	if v, ok := b.pendingCreates.Load(workspaceID); ok {
 		if rec := v.(pendingCreate); time.Now().Before(rec.until) {
@@ -92,7 +92,7 @@ func (b *Bridge) handleGetInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	workspace, err := b.getInstance(r.Context(), workspaceID)
+	instance, err := b.getInstance(r.Context(), workspaceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -101,7 +101,7 @@ func (b *Bridge) handleGetInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, workspace)
+	writeJSON(w, http.StatusOK, instance)
 }
 
 func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +112,7 @@ func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sync existence check before submitting the async operation. Without this,
-	// a PUT on a non-existent workspace returns 202 and silently fails ~10min
+	// a PUT on a non-existent instance returns 202 and silently fails ~10min
 	// later — QStash would mark the delivery as successful despite the failure.
 	if _, err := b.lookupRelease(r.Context(), workspaceID); err != nil {
 		if isInstanceNotFound(err) {

@@ -177,7 +177,7 @@ func (b *Bridge) GetInstanceAgent(ctx context.Context, workspaceID string) (*Age
 	}
 	ns, err := b.KubeClient.CoreV1().Namespaces().Get(ctx, rel.Namespace, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("get workspace namespace: %w", err)
+		return nil, fmt.Errorf("get instance namespace: %w", err)
 	}
 	agentID := ns.Annotations[appliedTemplateAnnotation]
 	if agentID == "" {
