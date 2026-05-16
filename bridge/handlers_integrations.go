@@ -8,16 +8,16 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// handleGetWorkspaceIntegrations GET /v1/workspaces/{id}/integrations
-func (b *Bridge) handleGetWorkspaceIntegrations(w http.ResponseWriter, r *http.Request) {
+// handleGetInstanceIntegrations GET /v1/instances/{id}/integrations
+func (b *Bridge) handleGetInstanceIntegrations(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
-	if !validWorkspaceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+	if !validInstanceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
-	statuses, err := b.GetWorkspaceIntegrations(r.Context(), workspaceID)
+	statuses, err := b.GetInstanceIntegrations(r.Context(), workspaceID)
 	if err != nil {
-		if isWorkspaceNotFound(err) {
+		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
@@ -27,13 +27,13 @@ func (b *Bridge) handleGetWorkspaceIntegrations(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]any{"integrations": statuses})
 }
 
-// handleEnableIntegration POST /v1/workspaces/{id}/integrations/{platform}
+// handleEnableIntegration POST /v1/instances/{id}/integrations/{platform}
 func (b *Bridge) handleEnableIntegration(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	workspaceID := vars["id"]
 	platform := vars["platform"]
-	if !validWorkspaceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+	if !validInstanceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 
@@ -45,7 +45,7 @@ func (b *Bridge) handleEnableIntegration(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := b.EnableIntegration(r.Context(), workspaceID, platform, cfg); err != nil {
-		if isWorkspaceNotFound(err) {
+		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
@@ -61,17 +61,17 @@ func (b *Bridge) handleEnableIntegration(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleDisableIntegration DELETE /v1/workspaces/{id}/integrations/{platform}
+// handleDisableIntegration DELETE /v1/instances/{id}/integrations/{platform}
 func (b *Bridge) handleDisableIntegration(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	workspaceID := vars["id"]
 	platform := vars["platform"]
-	if !validWorkspaceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+	if !validInstanceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	if err := b.DisableIntegration(r.Context(), workspaceID, platform); err != nil {
-		if isWorkspaceNotFound(err) {
+		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}

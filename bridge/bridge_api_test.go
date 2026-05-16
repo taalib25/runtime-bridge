@@ -88,7 +88,7 @@ func TestEnvMapFromRelease_Missing(t *testing.T) {
 	}
 }
 
-func TestWorkspaceSecretName(t *testing.T) {
+func TestInstanceSecretName(t *testing.T) {
 	b := newTestBridge("s")
 	got := b.workspaceSecretName("ws-1234567890abcdef")
 	if !strings.HasSuffix(got, "-secrets") {
@@ -143,7 +143,7 @@ func TestSplitImageReference_Empty(t *testing.T) {
 
 func TestBuildValues_SecretsExistingSecret(t *testing.T) {
 	b := newTestBridge("s")
-	spec := WorkspaceSpec{WorkspaceID: "ws-aabbccddeeff0011", TenantID: "t1", Image: "img"}
+	spec := InstanceSpec{InstanceID: "ws-aabbccddeeff0011", TenantID: "t1", Image: "img"}
 	vals, err := b.buildValues(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -163,8 +163,8 @@ func TestBuildValues_SecretsExistingSecret(t *testing.T) {
 
 func TestBuildValues_ExtraSecretKeys(t *testing.T) {
 	b := newTestBridge("s")
-	spec := WorkspaceSpec{
-		WorkspaceID: "ws-aabbccddeeff0011",
+	spec := InstanceSpec{
+		InstanceID: "ws-aabbccddeeff0011",
 		TenantID:    "t1",
 		Image:       "img",
 		Secrets:     map[string]string{"GOOGLE_API_KEY": "", "DISCORD_BOT_TOKEN": ""},
@@ -187,8 +187,8 @@ func TestBuildValues_ExtraSecretKeys(t *testing.T) {
 
 func TestBuildValues_ExtraEnv(t *testing.T) {
 	b := newTestBridge("s")
-	spec := WorkspaceSpec{
-		WorkspaceID: "ws-aabbccddeeff0011",
+	spec := InstanceSpec{
+		InstanceID: "ws-aabbccddeeff0011",
 		TenantID:    "t1",
 		Image:       "img",
 		EnvMap:      map[string]string{"MY_CUSTOM_VAR": "hello"},
@@ -424,37 +424,37 @@ func authedReq(method, path, body, secret string) *http.Request {
 	return req
 }
 
-func TestHandleSetWorkspaceProvider_BadBody(t *testing.T) {
+func TestHandleSetInstanceProvider_BadBody(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := authedReq(http.MethodPost, "/v1/workspaces/ws-1234567890abcdef/config/providers", "{bad json}", "secret")
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/config/providers", "{bad json}", "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
 	}
 }
 
-func TestHandleSetWorkspaceProvider_MissingProvider(t *testing.T) {
+func TestHandleSetInstanceProvider_MissingProvider(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := authedReq(http.MethodPost, "/v1/workspaces/ws-1234567890abcdef/config/providers", `{"apiKey":"sk-x"}`, "secret")
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/config/providers", `{"apiKey":"sk-x"}`, "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestHandleSetWorkspaceProvider_MissingAPIKey(t *testing.T) {
+func TestHandleSetInstanceProvider_MissingAPIKey(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := authedReq(http.MethodPost, "/v1/workspaces/ws-1234567890abcdef/config/providers", `{"provider":"openai"}`, "secret")
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/config/providers", `{"provider":"openai"}`, "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestHandleSetWorkspaceModel_MissingFields(t *testing.T) {
+func TestHandleSetInstanceModel_MissingFields(t *testing.T) {
 	b := newTestBridge("secret")
 
 	cases := []struct {
@@ -466,7 +466,7 @@ func TestHandleSetWorkspaceModel_MissingFields(t *testing.T) {
 	}
 	for _, tc := range cases {
 		rr := httptest.NewRecorder()
-		req := authedReq(http.MethodPut, "/v1/workspaces/ws-1234567890abcdef/config/model", tc.body, "secret")
+		req := authedReq(http.MethodPut, "/v1/instances/ws-1234567890abcdef/config/model", tc.body, "secret")
 		b.Router().ServeHTTP(rr, req)
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("body=%s: expected 400, got %d: %s", tc.body, rr.Code, rr.Body.String())
@@ -479,7 +479,7 @@ func TestHandleSetWorkspaceModel_MissingFields(t *testing.T) {
 func TestHandleEnableIntegration_BadBody(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := authedReq(http.MethodPost, "/v1/workspaces/ws-1234567890abcdef/integrations/telegram", "{bad}", "secret")
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/integrations/telegram", "{bad}", "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)
@@ -489,7 +489,7 @@ func TestHandleEnableIntegration_BadBody(t *testing.T) {
 func TestHandleEnableIntegration_UnsupportedPlatform(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := authedReq(http.MethodPost, "/v1/workspaces/ws-1234567890abcdef/integrations/twitter", `{}`, "secret")
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/integrations/twitter", `{}`, "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
@@ -500,7 +500,7 @@ func TestHandleEnableIntegration_MissingRequiredField(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
 	// Telegram with no botToken → should 400 before any k8s call
-	req := authedReq(http.MethodPost, "/v1/workspaces/ws-1234567890abcdef/integrations/telegram", `{}`, "secret")
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/integrations/telegram", `{}`, "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
@@ -532,7 +532,7 @@ func TestHandleCreateAgentTemplate_MissingName(t *testing.T) {
 func TestHandleApplyAgentTemplate_MissingAgentID(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := authedReq(http.MethodPost, "/v1/workspaces/ws-1234567890abcdef/agent", `{}`, "secret")
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/agent", `{}`, "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
@@ -542,7 +542,7 @@ func TestHandleApplyAgentTemplate_MissingAgentID(t *testing.T) {
 func TestHandleApplyAgentTemplate_BadBody(t *testing.T) {
 	b := newTestBridge("secret")
 	rr := httptest.NewRecorder()
-	req := authedReq(http.MethodPost, "/v1/workspaces/ws-1234567890abcdef/agent", "{bad}", "secret")
+	req := authedReq(http.MethodPost, "/v1/instances/ws-1234567890abcdef/agent", "{bad}", "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rr.Code)

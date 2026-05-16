@@ -48,7 +48,7 @@ When `dashboard.enabled && dashboard.ingress.enabled`:
 1. Bridge creates a second `IngressRoute` in the workspace namespace pointing at the
    dashboard Service port (9119).
 2. Route is always protected by the workspace ForwardAuth middleware (same as main route).
-3. Bridge `DELETE /workspaces/:id` must also delete the dashboard IngressRoute.
+3. Bridge `DELETE /instances/:id` must also delete the dashboard IngressRoute.
 
 ## Bridge Changes Required
 

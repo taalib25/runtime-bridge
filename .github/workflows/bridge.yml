@@ -98,8 +98,8 @@ jobs:
             echo "=== /readyz ==="
             curl -sf -H "Host: bridge.hermeshq.net" http://localhost/readyz | grep '"status":"ready"'
 
-            echo "=== /v1/workspaces (auth) ==="
-            curl -sf -H "Host: bridge.hermeshq.net" -H "X-Bridge-Secret: $SECRET" http://localhost/v1/workspaces | grep '"items"'
+            echo "=== /v1/instances (auth) ==="
+            curl -sf -H "Host: bridge.hermeshq.net" -H "X-Bridge-Secret: $SECRET" http://localhost/v1/instances | grep '"items"'
 
             echo "All smoke tests passed."
           EOF

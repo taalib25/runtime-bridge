@@ -1,0 +1,199 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-runtime-test
+  namespace: hermes-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-runtime-test
+  template:
+    metadata:
+      labels:
+        app: hermes-runtime-test
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        fsGroup: 1024
+
+      initContainers:
+        - name: install-agent
+          image: nousresearch/hermes-agent:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -d /mnt/hermes-state/hermes-agent ]; then
+                cp -r /opt/hermes /mnt/hermes-state/hermes-agent
+                echo "hermes-agent installed"
+              else
+                echo "hermes-agent already present, skipping"
+              fi
+              chown -R 1024:1024 /mnt/hermes-state
+          volumeMounts:
+            - name: hermes-state
+              mountPath: /mnt/hermes-state
+
+      containers:
+        - name: hermes-runtime
+          image: ghcr.io/ashneil12/hermes-webui:stable
+          imagePullPolicy: Always
+
+          ports:
+            - name: webui
+              containerPort: 8787
+
+          env:
+            - name: INSTANCE_ID
+              value: "hermes-runtime-test"
+
+            - name: HERMES_WEBUI_HOST
+              value: "0.0.0.0"
+            - name: HERMES_WEBUI_PORT
+              value: "8787"
+            - name: HERMES_WEBUI_STATE_DIR
+              value: "/home/hermeswebui/.hermes/webui"
+            - name: HERMES_WEBUI_DEFAULT_WORKSPACE
+              value: "/workspace"
+            - name: HERMES_WEBUI_AGENT_DIR
+              value: "/home/hermeswebui/.hermes/hermes-agent"
+
+            - name: HERMES_HOME
+              value: "/home/hermeswebui/.hermes"
+            - name: HERMES_TIMEZONE
+              value: "UTC"
+            - name: HERMES_EXEC_ASK
+              value: "false"
+
+            - name: HERMES_INFERENCE_PROVIDER
+              value: "openai-codex"
+            - name: HERMES_MODEL
+              value: "gpt-5.5"
+            - name: HERMES_WEBUI_DEFAULT_MODEL
+              value: "gpt-5.5"
+
+            - name: PATH
+              value: "/home/hermeswebui/.hermes/bin:/home/hermeswebui/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
+
+            - name: GH_CONFIG_DIR
+              value: "/home/hermeswebui/.hermes/gh"
+            - name: XDG_CONFIG_HOME
+              value: "/home/hermeswebui/.hermes/.config"
+
+            - name: PYTHONUSERBASE
+              value: "/home/hermeswebui/.hermes/python"
+            - name: PIP_CACHE_DIR
+              value: "/home/hermeswebui/.hermes/cache/pip"
+            - name: PIPX_HOME
+              value: "/home/hermeswebui/.hermes/pipx"
+            - name: PIPX_BIN_DIR
+              value: "/home/hermeswebui/.hermes/bin"
+
+            - name: UV_CACHE_DIR
+              value: "/home/hermeswebui/.hermes/cache/uv"
+            - name: UV_TOOL_DIR
+              value: "/home/hermeswebui/.hermes/uv/tools"
+            - name: UV_TOOL_BIN_DIR
+              value: "/home/hermeswebui/.hermes/bin"
+
+            - name: NPM_CONFIG_PREFIX
+              value: "/home/hermeswebui/.hermes/npm"
+            - name: NPM_CONFIG_CACHE
+              value: "/home/hermeswebui/.hermes/cache/npm"
+            - name: PNPM_HOME
+              value: "/home/hermeswebui/.hermes/pnpm"
+            - name: YARN_GLOBAL_FOLDER
+              value: "/home/hermeswebui/.hermes/yarn/global"
+            - name: YARN_CACHE_FOLDER
+              value: "/home/hermeswebui/.hermes/cache/yarn"
+            - name: COREPACK_HOME
+              value: "/home/hermeswebui/.hermes/corepack"
+
+            - name: BUN_INSTALL
+              value: "/home/hermeswebui/.hermes/bun"
+            - name: DENO_INSTALL
+              value: "/home/hermeswebui/.hermes/deno"
+
+            - name: CARGO_HOME
+              value: "/home/hermeswebui/.hermes/cargo"
+            - name: RUSTUP_HOME
+              value: "/home/hermeswebui/.hermes/rustup"
+            - name: GOPATH
+              value: "/home/hermeswebui/.hermes/go"
+            - name: GOBIN
+              value: "/home/hermeswebui/.hermes/bin"
+
+            - name: GEM_HOME
+              value: "/home/hermeswebui/.hermes/gem"
+            - name: GEM_PATH
+              value: "/home/hermeswebui/.hermes/gem"
+            - name: COMPOSER_HOME
+              value: "/home/hermeswebui/.hermes/composer"
+            - name: DOTNET_CLI_HOME
+              value: "/home/hermeswebui/.hermes/dotnet"
+
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-test-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-test-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-test-secrets
+                  key: OPENROUTER_API_KEY
+                  optional: true
+
+          volumeMounts:
+            - name: hermes-state
+              mountPath: /home/hermeswebui/.hermes
+
+            - name: hermes-workspace
+              mountPath: /workspace
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8787
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8787
+            initialDelaySeconds: 150
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+      volumes:
+        - name: hermes-state
+          persistentVolumeClaim:
+            claimName: hermes-state-test
+
+        - name: hermes-workspace
+          persistentVolumeClaim:
+            claimName: hermes-workspace-test
