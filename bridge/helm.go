@@ -61,6 +61,9 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 			b.trackOperation("create", "failure", started)
 			return nil, fmt.Errorf("seed workspace secret: %w", err)
 		}
+		if wsSecret.Data == nil {
+			wsSecret.Data = make(map[string][]byte)
+		}
 		changed := false
 		for k, v := range spec.Secrets {
 			if v != "" {
