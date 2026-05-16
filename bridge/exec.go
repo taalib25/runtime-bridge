@@ -48,7 +48,7 @@ type execMsg struct {
 func (b *Bridge) handleExec(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId"))
 		return
 	}
 

@@ -61,6 +61,9 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 			b.trackOperation("create", "failure", started)
 			return nil, fmt.Errorf("seed workspace secret: %w", err)
 		}
+		if wsSecret.Data == nil {
+			wsSecret.Data = make(map[string][]byte)
+		}
 		changed := false
 		for k, v := range spec.Secrets {
 			if v != "" {
@@ -308,7 +311,7 @@ func (b *Bridge) ListInstances(ctx context.Context) ([]InstanceStatus, error) {
 			b.Logger.Printf("[ListInstances] Skipping release %s: %v", rel.Name, err)
 			continue
 		}
-		status, err := b.getWorkspaceStatusFromRelease(ctx, rel, spec)
+		status, err := b.getInstanceStatusFromRelease(ctx, rel, spec)
 		if err != nil {
 			b.Logger.Printf("[ListInstances] Failed to collect workspace status for %s: %v", spec.InstanceID, err)
 			continue
@@ -633,7 +636,7 @@ func workspaceSpecFromRelease(defaultWorkspaceID string, values map[string]any, 
 	return spec, nil
 }
 
-func (b *Bridge) getWorkspaceStatusFromRelease(ctx context.Context, rel *release.Release, spec InstanceSpec) (InstanceStatus, error) {
+func (b *Bridge) getInstanceStatusFromRelease(ctx context.Context, rel *release.Release, spec InstanceSpec) (InstanceStatus, error) {
 	status, err := b.collectInstanceStatus(ctx, spec, rel.Name, rel.Info.FirstDeployed.Time)
 	if err != nil {
 		return InstanceStatus{}, err
