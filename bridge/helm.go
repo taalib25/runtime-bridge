@@ -521,17 +521,17 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 	// config.yaml directly to /home/hermeswebui/.hermes/config.yaml on the PVC.
 	values["persistence"].(map[string]any)["mountPath"] = "/home/hermeswebui/.hermes"
 
-	// /instance is a subPath so both dirs share one PVC claim.
+	// /workspace is a subPath so both dirs share one PVC claim.
 	values["extraVolumeMounts"] = []any{
-		map[string]any{"name": "data", "mountPath": "/instance", "subPath": "instance"},
+		map[string]any{"name": "data", "mountPath": "/workspace", "subPath": "workspace"},
 	}
 
-	// Create the instance subdir before the subPath mount binds.
+	// Create the workspace subdir before the subPath mount binds.
 	values["extraInitContainers"] = []any{
 		map[string]any{
 			"name":    "init-dirs",
 			"image":   "busybox:1.36",
-			"command": []any{"sh", "-c", "mkdir -p /mnt/instance /mnt/webui /mnt/bin /mnt/cache/pip /mnt/cache/npm /mnt/python /mnt/npm /mnt/pnpm"},
+			"command": []any{"sh", "-c", "mkdir -p /mnt/workspace /mnt/webui /mnt/bin /mnt/cache/pip /mnt/cache/npm /mnt/python /mnt/npm /mnt/pnpm"},
 			"volumeMounts": []any{map[string]any{
 				"name": "data", "mountPath": "/mnt",
 			}},
@@ -545,7 +545,7 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"HERMES_WEBUI_HOST":              "0.0.0.0",
 		"HERMES_WEBUI_PORT":              strconv.Itoa(spec.RuntimePort),
 		"HERMES_WEBUI_STATE_DIR":         h + "/webui",
-		"HERMES_WEBUI_DEFAULT_WORKSPACE": "/instance",
+		"HERMES_WEBUI_DEFAULT_WORKSPACE": "/workspace",
 		"HERMES_WEBUI_AGENT_DIR":         "/opt/hermes-agent",
 		"HOME":                           "/home/hermeswebui",
 		"HERMES_HOME":                    h,
