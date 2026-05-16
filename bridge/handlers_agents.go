@@ -91,11 +91,11 @@ func (b *Bridge) handleDeleteAgentTemplate(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"agentId": agentID, "status": "deleted"})
 }
 
-// handleApplyAgentTemplate POST /v1/workspaces/{id}/agent
+// handleApplyAgentTemplate POST /v1/instances/{id}/agent
 func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	var req ApplyAgentTemplateRequest
@@ -122,11 +122,11 @@ func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleGetInstanceAgent GET /v1/workspaces/{id}/agent
+// handleGetInstanceAgent GET /v1/instances/{id}/agent
 func (b *Bridge) handleGetInstanceAgent(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	tmpl, err := b.GetInstanceAgent(r.Context(), workspaceID)

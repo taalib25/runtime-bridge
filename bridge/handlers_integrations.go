@@ -8,11 +8,11 @@ import (
 	"github.com/gorilla/mux"
 )
 
-// handleGetInstanceIntegrations GET /v1/workspaces/{id}/integrations
+// handleGetInstanceIntegrations GET /v1/instances/{id}/integrations
 func (b *Bridge) handleGetInstanceIntegrations(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	statuses, err := b.GetInstanceIntegrations(r.Context(), workspaceID)
@@ -27,13 +27,13 @@ func (b *Bridge) handleGetInstanceIntegrations(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"integrations": statuses})
 }
 
-// handleEnableIntegration POST /v1/workspaces/{id}/integrations/{platform}
+// handleEnableIntegration POST /v1/instances/{id}/integrations/{platform}
 func (b *Bridge) handleEnableIntegration(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	workspaceID := vars["id"]
 	platform := vars["platform"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 
@@ -61,13 +61,13 @@ func (b *Bridge) handleEnableIntegration(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleDisableIntegration DELETE /v1/workspaces/{id}/integrations/{platform}
+// handleDisableIntegration DELETE /v1/instances/{id}/integrations/{platform}
 func (b *Bridge) handleDisableIntegration(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	workspaceID := vars["id"]
 	platform := vars["platform"]
 	if !validInstanceID(workspaceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid workspaceId format"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	if err := b.DisableIntegration(r.Context(), workspaceID, platform); err != nil {
