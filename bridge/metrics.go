@@ -19,25 +19,25 @@ func NewMetrics(clusterName string, registerer prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		InstanceCount: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "hermes_bridge",
-			Name:      "workspace_count",
-			Help:      "Number of Helm-managed workspaces visible to the bridge",
+			Name:      "instance_count",
+			Help:      "Number of Helm-managed instances visible to the bridge",
 		}, []string{"cluster"}),
 		OperationLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "hermes_bridge",
 			Name:      "operation_latency_seconds",
-			Help:      "Workspace operation latency in seconds",
+			Help:      "Instance operation latency in seconds",
 			Buckets:   prometheus.DefBuckets,
 		}, []string{"cluster", "operation", "result"}),
 		OperationResults: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "hermes_bridge",
 			Name:      "operation_total",
-			Help:      "Total workspace operations grouped by result",
+			Help:      "Total instance operations grouped by result",
 		}, []string{"cluster", "operation", "result"}),
 		InstanceHealth: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: "hermes_bridge",
-			Name:      "workspace_health",
-			Help:      "Workspace HTTP health check result (1=healthy, 0=unhealthy)",
-		}, []string{"cluster", "workspace_id"}),
+			Name:      "instance_health",
+			Help:      "Instance HTTP health check result (1=healthy, 0=unhealthy)",
+		}, []string{"cluster", "instance_id"}),
 		HTTPRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "hermes_bridge",
 			Name:      "http_requests_total",

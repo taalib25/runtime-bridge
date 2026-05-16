@@ -19,7 +19,7 @@ import (
 
 func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*release.Release, error) {
 	started := time.Now()
-	b.Logger.Printf("[CreateInstance] Starting for workspace %s, tenant %s", spec.InstanceID, spec.TenantID)
+	b.Logger.Printf("[CreateInstance] Starting for instance %s, tenant %s", spec.InstanceID, spec.TenantID)
 
 	chart, err := loader.Load(b.ChartPath)
 	if err != nil {
