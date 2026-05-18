@@ -43,6 +43,7 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		if rec := v.(pendingCreate); time.Now().Before(rec.until) {
 			writeJSON(w, http.StatusAccepted, map[string]any{
 				"instanceId":  workspaceID,
+				"clusterId":   b.ClusterName,
 				"status":       "provisioning",
 				"url":          instanceURL(spec),
 				"dashboardUrl": dashboardURL(spec),
@@ -80,6 +81,7 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"instanceId":  workspaceID,
+		"clusterId":   b.ClusterName,
 		"status":       "provisioning",
 		"url":          instanceURL(spec),
 		"dashboardUrl": dashboardURL(spec),
@@ -270,9 +272,13 @@ func (b *Bridge) handleRestartInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	op := b.submitOperation("restart", workspaceID, func(ctx context.Context) error {
-		return b.RestartInstance(ctx, workspaceID)
+	op, existing := b.submitInstanceOperation("restart", workspaceID, func(ctx context.Context) (string, error) {
+		return "", b.RestartInstance(ctx, workspaceID)
 	})
+	if existing != nil {
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		return
+	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
@@ -282,9 +288,13 @@ func (b *Bridge) handleRedeployInstance(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	op := b.submitOperation("redeploy", workspaceID, func(ctx context.Context) error {
-		return b.RedeployInstance(ctx, workspaceID)
+	op, existing := b.submitInstanceOperation("redeploy", workspaceID, func(ctx context.Context) (string, error) {
+		return "", b.RedeployInstance(ctx, workspaceID)
 	})
+	if existing != nil {
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		return
+	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
@@ -300,9 +310,13 @@ func (b *Bridge) handleRollbackInstance(w http.ResponseWriter, r *http.Request) 
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck — empty body or missing version defaults to 0 (previous release)
 	}
-	op := b.submitOperation("rollback", workspaceID, func(ctx context.Context) error {
-		return b.RollbackInstance(ctx, workspaceID, req.Version)
+	op, existing := b.submitInstanceOperation("rollback", workspaceID, func(ctx context.Context) (string, error) {
+		return "", b.RollbackInstance(ctx, workspaceID, req.Version)
 	})
+	if existing != nil {
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		return
+	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
@@ -312,10 +326,42 @@ func (b *Bridge) handleRepairInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	op := b.submitOperation("repair", workspaceID, func(ctx context.Context) error {
+	op, existing := b.submitInstanceOperation("repair", workspaceID, func(ctx context.Context) (string, error) {
 		_, err := b.RepairInstance(ctx, workspaceID)
-		return err
+		return "", err
 	})
+	if existing != nil {
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, op)
+}
+
+func (b *Bridge) handleUpgradeInstance(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validInstanceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		return
+	}
+	var req struct {
+		Image    string `json:"image"`
+		ImageTag string `json:"imageTag"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request body: %w", err))
+		return
+	}
+	if strings.TrimSpace(req.ImageTag) == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("imageTag is required"))
+		return
+	}
+	op, existing := b.submitInstanceOperation("upgrade", workspaceID, func(ctx context.Context) (string, error) {
+		return b.UpgradeInstance(ctx, workspaceID, req.Image, req.ImageTag)
+	})
+	if existing != nil {
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		return
+	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
