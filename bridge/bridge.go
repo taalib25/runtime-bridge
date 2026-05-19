@@ -47,8 +47,7 @@ type Bridge struct {
 	Metrics        *Metrics
 
 	ready          atomic.Bool
-	mu             sync.RWMutex
-	operations     map[string]*Operation
+	runner         *OperationRunner
 	pendingCreates sync.Map // instanceID → pendingCreate; throttles duplicate creates
 	pendingOps     sync.Map // instanceID → *Operation; throttles duplicate async ops
 	execTokens     sync.Map // token(string) → execToken; short-lived WebSocket auth tokens
@@ -95,9 +94,9 @@ func NewBridge(cfg Config) (*Bridge, error) {
 		KubeconfigPath: cfg.KubeconfigPath,
 		ChartPath:      cfg.ChartPath,
 		HTTPClient:     &http.Client{Timeout: cfg.HTTPClientTimeout},
-		Logger:         log.New(os.Stdout, "bridge ", log.LstdFlags|log.LUTC),
-		Metrics:        NewMetrics(cfg.ClusterName, nil),
-		operations:     make(map[string]*Operation),
+		Logger:  log.New(os.Stdout, "bridge ", log.LstdFlags|log.LUTC),
+		Metrics: NewMetrics(cfg.ClusterName, nil),
+		runner:  newOperationRunner(cfg.OperationTimeout),
 	}
 
 	bridge.ready.Store(true)
@@ -180,6 +179,7 @@ func (b *Bridge) Router() http.Handler {
 
 	// Messaging integrations
 	v1.HandleFunc("/instances/{id}/integrations", b.handleGetInstanceIntegrations).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/integrations", b.handleSetIntegrations).Methods(http.MethodPut)
 	v1.HandleFunc("/instances/{id}/integrations/{platform}", b.handleEnableIntegration).Methods(http.MethodPost)
 	v1.HandleFunc("/instances/{id}/integrations/{platform}", b.handleDisableIntegration).Methods(http.MethodDelete)
 
@@ -276,55 +276,8 @@ func (b *Bridge) trackOperation(operation, result string, started time.Time) {
 	b.Metrics.OperationResults.WithLabelValues(b.ClusterName, operation, result).Inc()
 }
 
-func (b *Bridge) recordOperation(op *Operation) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.operations[op.ID] = op
-}
-
-func (b *Bridge) updateOperation(id string, mutate func(*Operation)) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if op, ok := b.operations[id]; ok {
-		mutate(op)
-	}
-}
-
-func (b *Bridge) submitOperation(operationType, workspaceID string, fn func(context.Context) error) *Operation {
-	op := &Operation{
-		ID:          newOperationID(),
-		Type:        operationType,
-		InstanceID: workspaceID,
-		Status:      "running",
-		Message:     fmt.Sprintf("%s scheduled", operationType),
-		StartedAt:   time.Now().UTC(),
-	}
-	b.recordOperation(op)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), b.Config.OperationTimeout)
-		defer cancel()
-
-		if err := fn(ctx); err != nil {
-			completedAt := time.Now().UTC()
-			b.updateOperation(op.ID, func(existing *Operation) {
-				existing.Status = "failed"
-				existing.Error = err.Error()
-				existing.Message = fmt.Sprintf("%s failed", operationType)
-				existing.CompletedAt = &completedAt
-			})
-			return
-		}
-
-		completedAt := time.Now().UTC()
-		b.updateOperation(op.ID, func(existing *Operation) {
-			existing.Status = "succeeded"
-			existing.Message = fmt.Sprintf("%s completed", operationType)
-			existing.CompletedAt = &completedAt
-		})
-	}()
-
-	return op
+func (b *Bridge) submitOperation(operationType, instanceID string, fn func(context.Context) error) *Operation {
+	return b.runner.Submit(operationType, instanceID, fn)
 }
 
 // submitInstanceOperation is like submitOperation but enforces one-in-flight per instance.
@@ -385,15 +338,7 @@ func (b *Bridge) startOperationCleanup(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			// Evict completed operations older than 1 hour.
-			cutoff := time.Now().Add(-1 * time.Hour)
-			b.mu.Lock()
-			for id, op := range b.operations {
-				if op.CompletedAt != nil && op.CompletedAt.Before(cutoff) {
-					delete(b.operations, id)
-				}
-			}
-			b.mu.Unlock()
+			b.runner.Cleanup(time.Now().Add(-1 * time.Hour))
 			// Evict expired pendingCreates entries. These are checked on read
 			// but never deleted, causing the map to grow unbounded over time.
 			b.pendingCreates.Range(func(k, v any) bool {
@@ -557,13 +502,6 @@ func isInstanceNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not found")
 }
 
-func newOperationID() string {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("op-%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(buf)
-}
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -14,7 +15,7 @@ var platformSecretKeys = map[string][]string{
 	"telegram":    {"TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"},
 	"discord":     {"DISCORD_BOT_TOKEN"},
 	"slack":       {"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"},
-	"signal":      {"SIGNAL_BOT_TOKEN"}, // only the daemon token is secret; httpUrl+account go in env
+	"signal":      {}, // no secrets — connects via SIGNAL_HTTP_URL + SIGNAL_ACCOUNT (plain env)
 	"whatsapp":    {},                   // no secrets — session is QR-based, stored on PVC
 	"dingtalk":    {"DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET"},
 	"feishu":      {"FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_ENCRYPT_KEY", "FEISHU_VERIFICATION_TOKEN"},
@@ -173,9 +174,13 @@ func (b *Bridge) GetInstanceIntegrations(ctx context.Context, workspaceID string
 	var statuses []IntegrationStatus
 	for platform, secretKeys := range platformSecretKeys {
 		enabled := false
-		if platform == "whatsapp" {
+		switch platform {
+		case "whatsapp":
 			enabled = envMap["WHATSAPP_ENABLED"] == "true"
-		} else {
+		case "signal":
+			// Signal has no secret tokens — connection is via HTTP URL + account (plain env).
+			enabled = envMap["SIGNAL_HTTP_URL"] != ""
+		default:
 			for _, key := range secretKeys {
 				if secret != nil && len(secret.Data[key]) > 0 {
 					enabled = true
@@ -198,4 +203,102 @@ func (b *Bridge) GetInstanceIntegrations(ctx context.Context, workspaceID string
 		})
 	}
 	return statuses, nil
+}
+
+// SetIntegrations converges the instance to exactly the set of messaging platforms
+// in desired. Platforms absent from the map are disabled; an empty map disables all.
+// All changes are applied in a single Helm upgrade — not one upgrade per platform.
+func (b *Bridge) SetIntegrations(ctx context.Context, workspaceID string, desired map[string]json.RawMessage) error {
+	rel, err := b.lookupRelease(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	ns := rel.Namespace
+	releaseName := rel.Name
+	secretName := b.workspaceSecretName(workspaceID)
+
+	// Build union sets of all known platform keys so we can strip them cleanly.
+	allSecretKeys := map[string]bool{}
+	allEnvKeys := map[string]bool{}
+	for _, keys := range platformSecretKeys {
+		for _, k := range keys {
+			allSecretKeys[k] = true
+		}
+	}
+	for _, keys := range platformEnvKeys {
+		for _, k := range keys {
+			allEnvKeys[k] = true
+		}
+	}
+
+	// Get current secret — create if missing.
+	secret, err := b.getOrCreateWorkspaceSecret(ctx, ns, secretName)
+	if err != nil {
+		return err
+	}
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+
+	// Strip all platform secret keys from current secret data.
+	for k := range allSecretKeys {
+		delete(secret.Data, k)
+	}
+
+	// Strip all platform env keys from current envMap.
+	envMap := envMapFromRelease(rel.Config)
+	for k := range allEnvKeys {
+		delete(envMap, k)
+	}
+
+	// Apply desired platforms.
+	for platform, raw := range desired {
+		cfg, err := decodeIntegrationCfg(platform, raw)
+		if err != nil {
+			return fmt.Errorf("platform %s: %w", platform, err)
+		}
+		// Split cfg into secrets and plain env vars.
+		secretKeySet := map[string]bool{}
+		for _, k := range platformSecretKeys[platform] {
+			secretKeySet[k] = true
+		}
+		for k, v := range cfg {
+			if secretKeySet[k] {
+				secret.Data[k] = []byte(v)
+			} else {
+				envMap[k] = v
+			}
+		}
+	}
+
+	// Persist updated k8s Secret.
+	if _, err := b.KubeClient.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("update workspace secret: %w", err)
+	}
+
+	// Reconstruct spec and apply new env + secret key registrations.
+	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	if err != nil {
+		return fmt.Errorf("reconstruct spec: %w", err)
+	}
+	spec.EnvMap = envMap
+
+	// Rebuild spec.Secrets to reflect what is actually in the k8s Secret.
+	// Preserve non-platform keys (e.g. API_SERVER_KEY, provider API keys).
+	for k := range allSecretKeys {
+		delete(spec.Secrets, k)
+	}
+	for k := range secret.Data {
+		if allSecretKeys[k] {
+			spec.Secrets[k] = "" // key name only — value lives in k8s Secret
+		}
+	}
+
+	spec.OverwriteConfig = false
+
+	if _, err := b.UpdateInstance(ctx, spec); err != nil {
+		return err
+	}
+	b.Logger.Printf("[SetIntegrations] Converged %d platform(s) for instance %s", len(desired), workspaceID)
+	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
