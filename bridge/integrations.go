@@ -47,6 +47,34 @@ var platformEnvKeys = map[string][]string{
 	"bluebubbles": {"BLUEBUBBLES_WEBHOOK_HOST", "BLUEBUBBLES_WEBHOOK_PORT", "BLUEBUBBLES_ALLOWED_USERS", "BLUEBUBBLES_ALLOW_ALL_USERS"},
 }
 
+// platformAllowedUsersKey maps each platform to its ALLOWED_USERS env var.
+// Used to decide whether to set GATEWAY_ALLOW_ALL_USERS as the default.
+var platformAllowedUsersKey = map[string]string{
+	"telegram":    "TELEGRAM_ALLOWED_USERS",
+	"discord":     "DISCORD_ALLOWED_USERS",
+	"slack":       "SLACK_ALLOWED_USERS",
+	"whatsapp":    "WHATSAPP_ALLOWED_USERS",
+	"signal":      "SIGNAL_ALLOWED_USERS",
+	"dingtalk":    "DINGTALK_ALLOWED_USERS",
+	"feishu":      "FEISHU_ALLOWED_USERS",
+	"wecom":       "WECOM_ALLOWED_USERS",
+	"bluebubbles": "BLUEBUBBLES_ALLOWED_USERS",
+}
+
+// applyGatewayAllowAll sets GATEWAY_ALLOW_ALL_USERS=true in envMap when no
+// platform-specific allowedUsers is configured, ensuring users aren't locked
+// out by default. Clears it when any allowedUsers is present (caller is
+// managing access explicitly).
+func applyGatewayAllowAll(envMap map[string]string) {
+	for _, key := range platformAllowedUsersKey {
+		if envMap[key] != "" {
+			delete(envMap, "GATEWAY_ALLOW_ALL_USERS")
+			return
+		}
+	}
+	envMap["GATEWAY_ALLOW_ALL_USERS"] = "true"
+}
+
 // EnableIntegration stores platform tokens in the workspace k8s Secret and
 // updates the workspace's env vars so the gateway picks them up on next start.
 // cfg is a flat map of secret-key→value and env-key→value pairs for the platform.
@@ -92,6 +120,7 @@ func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform st
 			envMap[key] = v
 		}
 	}
+	applyGatewayAllowAll(envMap)
 	spec.EnvMap = envMap
 	// Register platform secret keys so the Deployment gets secretKeyRef entries.
 	for _, key := range platformSecretKeys[platform] {
@@ -103,7 +132,11 @@ func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform st
 		return err
 	}
 	b.Logger.Printf("[EnableIntegration] Enabled %s for instance %s", platform, workspaceID)
-	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
+	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute); err != nil {
+		return err
+	}
+	b.EnsureGatewayRunning(ctx, workspaceID)
+	return nil
 }
 
 // DisableIntegration removes platform tokens from the workspace k8s Secret and
@@ -154,7 +187,11 @@ func (b *Bridge) DisableIntegration(ctx context.Context, workspaceID, platform s
 		return err
 	}
 	b.Logger.Printf("[DisableIntegration] Disabled %s for instance %s", platform, workspaceID)
-	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
+	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute); err != nil {
+		return err
+	}
+	b.EnsureGatewayRunning(ctx, workspaceID)
+	return nil
 }
 
 // GetWorkspaceIntegrations returns the status of all known messaging platforms
@@ -277,6 +314,7 @@ func (b *Bridge) SetIntegrations(ctx context.Context, workspaceID string, desire
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
+	applyGatewayAllowAll(envMap)
 	spec.EnvMap = envMap
 
 	// Rebuild spec.Secrets to reflect what is actually in the k8s Secret.
@@ -296,5 +334,9 @@ func (b *Bridge) SetIntegrations(ctx context.Context, workspaceID string, desire
 		return err
 	}
 	b.Logger.Printf("[SetIntegrations] Converged %d platform(s) for instance %s", len(desired), workspaceID)
-	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
+	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute); err != nil {
+		return err
+	}
+	b.EnsureGatewayRunning(ctx, workspaceID)
+	return nil
 }

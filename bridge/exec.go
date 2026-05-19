@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -205,4 +207,63 @@ func (q *wsSizeQueue) Next() *remotecommand.TerminalSize {
 		return nil
 	}
 	return &size
+}
+
+// podRunCommand runs a command in the given pod+container and captures stdout/stderr.
+// Non-interactive — no PTY. Returns an error if the command exits non-zero.
+func (b *Bridge) podRunCommand(ctx context.Context, ns, podName, container string, cmd []string) (stdout, stderr string, err error) {
+	req := b.KubeClient.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(ns).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: container,
+			Command:   cmd,
+			Stdin:     false,
+			Stdout:    true,
+			Stderr:    true,
+			TTY:       false,
+		}, scheme.ParameterCodec)
+
+	executor, err := remotecommand.NewSPDYExecutor(b.RESTConfig, http.MethodPost, req.URL())
+	if err != nil {
+		return "", "", fmt.Errorf("create executor: %w", err)
+	}
+
+	var outBuf, errBuf bytes.Buffer
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &outBuf,
+		Stderr: &errBuf,
+	})
+	return outBuf.String(), errBuf.String(), err
+}
+
+// EnsureGatewayRunning checks if the Hermes gateway is running in the instance
+// pod and starts it if not. Called after every integration config change.
+// A start failure is logged but not returned — the integration config is already
+// applied and the pod owns gateway lifecycle from this point.
+func (b *Bridge) EnsureGatewayRunning(ctx context.Context, workspaceID string) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	pod, err := b.findExecPod(ctx, workspaceID)
+	if err != nil {
+		b.Logger.Printf("[EnsureGatewayRunning] no running pod for %s: %v", workspaceID, err)
+		return
+	}
+	container := pod.Spec.Containers[0].Name
+
+	_, _, err = b.podRunCommand(ctx, workspaceID, pod.Name, container, []string{"hermes", "gateway", "status"})
+	if err == nil {
+		return // already running
+	}
+
+	b.Logger.Printf("[EnsureGatewayRunning] gateway not running in %s, starting...", workspaceID)
+	_, stderr, startErr := b.podRunCommand(ctx, workspaceID, pod.Name, container,
+		[]string{"hermes", "gateway", "start"})
+	if startErr != nil {
+		b.Logger.Printf("[EnsureGatewayRunning] gateway start failed for %s: %v (stderr: %s)",
+			workspaceID, startErr, strings.TrimSpace(stderr))
+	}
 }

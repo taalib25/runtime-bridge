@@ -606,6 +606,35 @@ func TestHandleSetIntegrations_EmptyBody_Accepted(t *testing.T) {
 	}
 }
 
+// ─── applyGatewayAllowAll ────────────────────────────────────────────────────
+
+func TestApplyGatewayAllowAll_NoUsers_SetsFlag(t *testing.T) {
+	env := map[string]string{}
+	applyGatewayAllowAll(env)
+	if env["GATEWAY_ALLOW_ALL_USERS"] != "true" {
+		t.Errorf("expected GATEWAY_ALLOW_ALL_USERS=true when no allowedUsers set, got %q", env["GATEWAY_ALLOW_ALL_USERS"])
+	}
+}
+
+func TestApplyGatewayAllowAll_WithTelegramUsers_ClearsFlag(t *testing.T) {
+	env := map[string]string{
+		"GATEWAY_ALLOW_ALL_USERS": "true",
+		"TELEGRAM_ALLOWED_USERS":  "123,456",
+	}
+	applyGatewayAllowAll(env)
+	if _, ok := env["GATEWAY_ALLOW_ALL_USERS"]; ok {
+		t.Error("expected GATEWAY_ALLOW_ALL_USERS cleared when allowedUsers present")
+	}
+}
+
+func TestApplyGatewayAllowAll_WithDiscordUsers_ClearsFlag(t *testing.T) {
+	env := map[string]string{"DISCORD_ALLOWED_USERS": "user1"}
+	applyGatewayAllowAll(env)
+	if _, ok := env["GATEWAY_ALLOW_ALL_USERS"]; ok {
+		t.Error("expected GATEWAY_ALLOW_ALL_USERS cleared when discord allowedUsers present")
+	}
+}
+
 // ─── Agent template handler validation ───────────────────────────────────────
 
 func TestHandleCreateAgentTemplate_BadBody(t *testing.T) {
