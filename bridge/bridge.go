@@ -298,7 +298,7 @@ func (b *Bridge) submitInstanceOperation(operationType, instanceID string, fn fu
 		return nil, actual.(*Operation)
 	}
 
-	b.recordOperation(op)
+	b.runner.Record(op)
 
 	go func() {
 		defer b.pendingOps.Delete(instanceID)
@@ -309,7 +309,7 @@ func (b *Bridge) submitInstanceOperation(operationType, instanceID string, fn fu
 		msg, err := fn(ctx)
 		completedAt := time.Now().UTC()
 		if err != nil {
-			b.updateOperation(op.ID, func(existing *Operation) {
+			b.runner.Update(op.ID, func(existing *Operation) {
 				existing.Status = "failed"
 				existing.Error = err.Error()
 				existing.Message = fmt.Sprintf("%s failed", operationType)
@@ -322,7 +322,7 @@ func (b *Bridge) submitInstanceOperation(operationType, instanceID string, fn fu
 		if msg != "" {
 			successMsg = msg
 		}
-		b.updateOperation(op.ID, func(existing *Operation) {
+		b.runner.Update(op.ID, func(existing *Operation) {
 			existing.Status = "succeeded"
 			existing.Message = successMsg
 			existing.CompletedAt = &completedAt
