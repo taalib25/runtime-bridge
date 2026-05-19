@@ -226,9 +226,7 @@ func (b *Bridge) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 func (b *Bridge) handleGetOperation(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	b.mu.RLock()
-	op, ok := b.operations[id]
-	b.mu.RUnlock()
+	op, ok := b.runner.Get(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, fmt.Errorf("operation %q not found", id))
 		return
@@ -242,14 +240,7 @@ func (b *Bridge) handleListInstanceOperations(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	b.mu.RLock()
-	var ops []*Operation
-	for _, op := range b.operations {
-		if op.InstanceID == workspaceID {
-			ops = append(ops, op)
-		}
-	}
-	b.mu.RUnlock()
+	ops := b.runner.ListForInstance(workspaceID)
 	sort.Slice(ops, func(i, j int) bool {
 		return ops[i].StartedAt.After(ops[j].StartedAt)
 	})

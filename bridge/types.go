@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type InstanceSpec struct {
 	InstanceID string `json:"instanceId"`
@@ -374,6 +377,7 @@ type TelegramIntegrationRequest struct {
 	GroupAllowedUsers string `json:"groupAllowedUsers,omitempty"`
 	GroupAllowedChats string `json:"groupAllowedChats,omitempty"`
 	HomeChannel       string `json:"homeChannel,omitempty"`
+	HomeChannelName   string `json:"homeChannelName,omitempty"`
 	WebhookURL        string `json:"webhookUrl,omitempty"`
 	WebhookPort       string `json:"webhookPort,omitempty"`
 }
@@ -386,17 +390,20 @@ type DiscordIntegrationRequest struct {
 	AllowedRoles         string `json:"allowedRoles,omitempty"`
 	AllowedChannels      string `json:"allowedChannels,omitempty"`
 	HomeChannel          string `json:"homeChannel,omitempty"`
+	HomeChannelName      string `json:"homeChannelName,omitempty"`
 	RequireMention       string `json:"requireMention,omitempty"`
 	FreeResponseChannels string `json:"freeResponseChannels,omitempty"`
+	IgnoredChannels      string `json:"ignoredChannels,omitempty"`
 }
 
 // SlackIntegrationRequest enables the Slack messaging integration.
 // AppToken is required for Socket Mode; AllowedUsers should be set.
 type SlackIntegrationRequest struct {
-	BotToken     string `json:"botToken"`
-	AppToken     string `json:"appToken"`
-	AllowedUsers string `json:"allowedUsers,omitempty"`
-	HomeChannel  string `json:"homeChannel,omitempty"`
+	BotToken        string `json:"botToken"`
+	AppToken        string `json:"appToken"`
+	AllowedUsers    string `json:"allowedUsers,omitempty"`
+	HomeChannel     string `json:"homeChannel,omitempty"`
+	HomeChannelName string `json:"homeChannelName,omitempty"`
 }
 
 // WhatsAppIntegrationRequest enables the WhatsApp integration (Baileys-based).
@@ -407,13 +414,17 @@ type WhatsAppIntegrationRequest struct {
 	Mode          string `json:"mode,omitempty"` // defaults to "baileys"
 }
 
-// SignalIntegrationRequest enables the Signal messaging integration.
+// SignalIntegrationRequest enables the Signal messaging integration via signal-cli REST API.
+// HTTPURL is the signal-cli REST API endpoint; Account is the registered phone number.
+// Signal has no secret tokens — connection details are plain env vars.
 type SignalIntegrationRequest struct {
 	HTTPURL           string `json:"httpUrl"`
 	Account           string `json:"account"`
 	AllowedUsers      string `json:"allowedUsers,omitempty"`
 	GroupAllowedUsers string `json:"groupAllowedUsers,omitempty"`
+	HomeChannelName   string `json:"homeChannelName,omitempty"`
 	AllowAllUsers     bool   `json:"allowAllUsers,omitempty"`
+	IgnoreStories     bool   `json:"ignoreStories,omitempty"`
 }
 
 // DingTalkIntegrationRequest enables the DingTalk messaging integration.
@@ -453,6 +464,12 @@ type BlueBubblesIntegrationRequest struct {
 	AllowedUsers string `json:"allowedUsers,omitempty"`
 	AllowAllUsers bool  `json:"allowAllUsers,omitempty"`
 }
+
+// IntegrationsPutRequest is the body for PUT /v1/instances/{id}/integrations.
+// Keys are platform names (telegram, discord, slack, whatsapp, signal, dingtalk,
+// feishu, wecom, bluebubbles). Platforms absent from the map are disabled.
+// An empty map disables all integrations.
+type IntegrationsPutRequest map[string]json.RawMessage
 
 // ─── Agent template types ─────────────────────────────────────────────────────
 

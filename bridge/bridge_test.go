@@ -29,7 +29,7 @@ func newTestBridge(secret string) *Bridge {
 		HTTPClient:  &http.Client{Timeout: 5 * time.Second},
 		Logger:      log.New(os.Stdout, "test ", log.LstdFlags),
 		Metrics:     NewMetrics(cfg.ClusterName, prometheus.NewRegistry()),
-		operations:  make(map[string]*Operation),
+		runner:      newOperationRunner(cfg.OperationTimeout),
 	}
 }
 

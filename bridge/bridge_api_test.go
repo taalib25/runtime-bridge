@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -504,6 +505,133 @@ func TestHandleEnableIntegration_MissingRequiredField(t *testing.T) {
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ─── decodeIntegrationCfg unit tests ─────────────────────────────────────────
+
+func TestDecodeIntegrationCfg_Signal_Valid(t *testing.T) {
+	cfg, err := decodeIntegrationCfg("signal", json.RawMessage(`{"httpUrl":"http://signal:8080","account":"+1234567890"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg["SIGNAL_HTTP_URL"] != "http://signal:8080" {
+		t.Errorf("expected SIGNAL_HTTP_URL, got %q", cfg["SIGNAL_HTTP_URL"])
+	}
+	if cfg["SIGNAL_ACCOUNT"] != "+1234567890" {
+		t.Errorf("expected SIGNAL_ACCOUNT, got %q", cfg["SIGNAL_ACCOUNT"])
+	}
+	if _, hasToken := cfg["SIGNAL_BOT_TOKEN"]; hasToken {
+		t.Error("SIGNAL_BOT_TOKEN must not be set — Signal has no bot token")
+	}
+}
+
+func TestDecodeIntegrationCfg_Signal_MissingHTTPUrl(t *testing.T) {
+	_, err := decodeIntegrationCfg("signal", json.RawMessage(`{"account":"+1"}`))
+	if err == nil || !strings.Contains(err.Error(), "httpUrl") {
+		t.Fatalf("expected httpUrl error, got %v", err)
+	}
+}
+
+func TestDecodeIntegrationCfg_Signal_IgnoreStories(t *testing.T) {
+	cfg, err := decodeIntegrationCfg("signal", json.RawMessage(`{"httpUrl":"http://s:8080","account":"+1","ignoreStories":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg["SIGNAL_IGNORE_STORIES"] != "true" {
+		t.Errorf("expected SIGNAL_IGNORE_STORIES=true, got %q", cfg["SIGNAL_IGNORE_STORIES"])
+	}
+}
+
+func TestDecodeIntegrationCfg_Telegram_HomeChannelName(t *testing.T) {
+	cfg, err := decodeIntegrationCfg("telegram", json.RawMessage(`{"botToken":"tok","homeChannelName":"general"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg["TELEGRAM_HOME_CHANNEL_NAME"] != "general" {
+		t.Errorf("expected TELEGRAM_HOME_CHANNEL_NAME=general, got %q", cfg["TELEGRAM_HOME_CHANNEL_NAME"])
+	}
+}
+
+func TestDecodeIntegrationCfg_Discord_MissingFields(t *testing.T) {
+	cfg, err := decodeIntegrationCfg("discord", json.RawMessage(`{"botToken":"tok","ignoredChannels":"spam","homeChannelName":"main"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg["DISCORD_IGNORED_CHANNELS"] != "spam" {
+		t.Errorf("expected DISCORD_IGNORED_CHANNELS=spam, got %q", cfg["DISCORD_IGNORED_CHANNELS"])
+	}
+	if cfg["DISCORD_HOME_CHANNEL_NAME"] != "main" {
+		t.Errorf("expected DISCORD_HOME_CHANNEL_NAME=main, got %q", cfg["DISCORD_HOME_CHANNEL_NAME"])
+	}
+}
+
+func TestDecodeIntegrationCfg_UnknownPlatform(t *testing.T) {
+	_, err := decodeIntegrationCfg("twitter", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("expected error for unknown platform")
+	}
+}
+
+// ─── handleSetIntegrations handler tests ─────────────────────────────────────
+
+func TestHandleSetIntegrations_BadBody(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPut, "/v1/instances/ws-1234567890abcdef/integrations", "{bad}", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleSetIntegrations_UnknownPlatform(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPut, "/v1/instances/ws-1234567890abcdef/integrations", `{"twitter":{}}`, "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleSetIntegrations_EmptyBody_Accepted(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := authedReq(http.MethodPut, "/v1/instances/ws-1234567890abcdef/integrations", `{}`, "secret")
+	b.Router().ServeHTTP(rr, req)
+	// Empty body is valid — it disables all. Returns 202 (async op).
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// ─── applyGatewayAllowAll ────────────────────────────────────────────────────
+
+func TestApplyGatewayAllowAll_NoUsers_SetsFlag(t *testing.T) {
+	env := map[string]string{}
+	applyGatewayAllowAll(env)
+	if env["GATEWAY_ALLOW_ALL_USERS"] != "true" {
+		t.Errorf("expected GATEWAY_ALLOW_ALL_USERS=true when no allowedUsers set, got %q", env["GATEWAY_ALLOW_ALL_USERS"])
+	}
+}
+
+func TestApplyGatewayAllowAll_WithTelegramUsers_ClearsFlag(t *testing.T) {
+	env := map[string]string{
+		"GATEWAY_ALLOW_ALL_USERS": "true",
+		"TELEGRAM_ALLOWED_USERS":  "123,456",
+	}
+	applyGatewayAllowAll(env)
+	if _, ok := env["GATEWAY_ALLOW_ALL_USERS"]; ok {
+		t.Error("expected GATEWAY_ALLOW_ALL_USERS cleared when allowedUsers present")
+	}
+}
+
+func TestApplyGatewayAllowAll_WithDiscordUsers_ClearsFlag(t *testing.T) {
+	env := map[string]string{"DISCORD_ALLOWED_USERS": "user1"}
+	applyGatewayAllowAll(env)
+	if _, ok := env["GATEWAY_ALLOW_ALL_USERS"]; ok {
+		t.Error("expected GATEWAY_ALLOW_ALL_USERS cleared when discord allowedUsers present")
 	}
 }
 
