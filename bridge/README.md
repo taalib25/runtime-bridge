@@ -1,202 +1,298 @@
-# Hermes Go Bridge
+# Hermes Bridge
 
-A lightweight HTTP service that manages Hermes workspace lifecycles via Helm SDK, replacing the Kubernetes operator approach.
+A lightweight Go HTTP service that manages Hermes runtime instance lifecycles via the Helm SDK on a Kubernetes (k3s) cluster.
 
 ## Overview
 
-The Go Bridge provides a simpler alternative to the CRD/controller pattern:
-
-- **No CRDs**: Workspaces are managed as Helm releases
-- **No Controller**: Lifecycle logic runs in a sync loop instead of reconcile
-- **Thin HTTP API**: RESTful endpoints for workspace CRUD operations
-- **Helm SDK**: Direct Helm operations for install/upgrade/uninstall
+- **No CRDs** — instances are Helm releases
+- **No controller** — lifecycle logic runs via HTTP API + background sync loop
+- **Async operations** — all mutating ops return an operation ID you can poll
+- **Multi-bridge ready** — each bridge manages one cluster; the backend routes to the right bridge per instance
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Backend API   │────▶│    Go Bridge    │────▶│   Helm SDK      │
-│   (Hermes HQ)   │     │   (HTTP REST)   │     │   (Releases)    │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                                                      │
-                                                      ▼
-                                              ┌─────────────────┐
-                                              │  Kubernetes     │
-                                              │  (Deployments)  │
-                                              └─────────────────┘
+Backend API  ──▶  Bridge (HTTPS)  ──▶  Helm SDK  ──▶  k8s Deployments
+                       │
+                       └──▶  k8s Secrets (instance spec + provider keys)
+                       └──▶  Traefik IngressRoutes (per instance)
 ```
+
+Each instance gets its own namespace, Helm release, PVC, and Traefik IngressRoute. The bridge's `clusterId` (set via `BRIDGE_CLUSTER_NAME`) is returned on every create so the backend knows which bridge owns the instance.
+
+---
 
 ## API Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/healthz` | GET | Service health check |
-| `/readyz` | GET | Readiness check (kube + helm) |
-| `/metrics` | GET | Prometheus metrics |
-| `/v1/workspaces` | GET | List all workspaces |
-| `/v1/workspaces/{id}` | POST | Create workspace (async) |
-| `/v1/workspaces/{id}` | GET | Get workspace details |
-| `/v1/workspaces/{id}` | PUT | Update workspace (async) |
-| `/v1/workspaces/{id}` | DELETE | Delete workspace (async) |
-| `/v1/workspaces/{id}/status` | GET | Get workspace status |
-| `/v1/workspaces/{id}/health` | GET | Health check endpoint |
+All `/v1/*` endpoints require the `X-Bridge-Secret` header.
 
-All `/v1/*` endpoints require authentication via `X-Bridge-Secret` header.
+### System
 
-## Configuration
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/healthz` | Liveness — returns `{"status":"ok","cluster":"...","version":"..."}` |
+| GET | `/readyz` | Readiness — checks kube + Helm connectivity |
+| GET | `/metrics` | Prometheus metrics |
 
-Environment variables (with defaults):
+### Instances
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BRIDGE_LISTEN_ADDRESS` | `:8080` | HTTP server address |
-| `BRIDGE_NAMESPACE` | `default` | Default namespace for releases |
-| `BRIDGE_CLUSTER_NAME` | *(required)* | Cluster identifier |
-| `BRIDGE_KUBECONFIG` | *(in-cluster)* | Path to kubeconfig |
-| `BRIDGE_CHART_PATH` | *(required)* | Path to Helm chart |
-| `BRIDGE_SECRET` | *(required)* | Authentication secret |
-| `BRIDGE_SYNC_INTERVAL` | `5m` | Status sync interval |
-| `BRIDGE_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown timeout |
-| `BRIDGE_HTTP_CLIENT_TIMEOUT` | `5s` | Health check timeout |
-| `BRIDGE_OPERATION_TIMEOUT` | `10m` | Async operation timeout |
-| `BRIDGE_HEALTH_PATH` | `/healthz` | Workspace health path |
-| `BRIDGE_RELEASE_PREFIX` | *(empty)* | Prefix for release names |
-| `BRIDGE_CREATE_NAMESPACE` | `false` | Create namespace if missing |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/instances` | List all instances |
+| POST | `/v1/instances/{id}` | Create instance (async, 202) |
+| GET | `/v1/instances/{id}` | Get instance details |
+| PUT | `/v1/instances/{id}` | Update instance spec (async, 202) |
+| DELETE | `/v1/instances/{id}` | Delete instance (async, 202) |
+| DELETE | `/v1/instances/{id}?purge=true` | Permanently destroy instance + PVC (requires `X-Confirm-Data-Deletion: {id}` header) |
+| GET | `/v1/instances/{id}/status` | Pod phase, health, replicas |
+| GET | `/v1/instances/{id}/health` | 200 if healthy, 503 if not |
+| GET | `/v1/instances/{id}/events` | Recent Kubernetes events |
 
-Alternatively, use a YAML config file via `BRIDGE_CONFIG_FILE`:
+### Lifecycle Operations
 
-```yaml
-listenAddress: ":8080"
-namespace: "hermes-workspaces"
-clusterName: "hermes-prod"
-chartPath: "/app/charts/hermes-agent"
-bridgeSecret: "${BRIDGE_SECRET}"
-syncInterval: 5m
-shutdownTimeout: 10s
-httpClientTimeout: 5s
-operationTimeout: 10m
-healthPath: "/healthz"
-releasePrefix: "ws-"
-createNamespace: true
+All ops are async — they return 202 with an `Operation` object. Poll `/v1/operations/{opId}` for result.
+If an op is already in-flight for the instance, returns **409 Conflict** with the existing op ID.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/v1/instances/{id}/restart` | Rolling restart (patch annotation) |
+| POST | `/v1/instances/{id}/redeploy` | Re-run Helm upgrade from stored spec |
+| POST | `/v1/instances/{id}/rollback` | Rollback to previous Helm revision (body: `{"version": N}`, 0 = previous) |
+| POST | `/v1/instances/{id}/repair` | Auto-detect and fix pod issues |
+| POST | `/v1/instances/{id}/upgrade` | Upgrade to a new image (see below) |
+| GET | `/v1/instances/{id}/operations` | List ops for this instance (most recent first, default limit 20) |
+| GET | `/v1/operations/{opId}` | Poll a specific operation |
+
+#### Upgrade endpoint
+
+Upgrades the running image via Helm rolling update. On failure, automatically rolls back to the previous Helm revision.
+
+```bash
+POST /v1/instances/{id}/upgrade
+{
+  "image": "ghcr.io/taalib25/runtime-node-core",  # optional — defaults to stored spec
+  "imageTag": "v0.2.0"                              # required
+}
 ```
 
-## Workspace Spec
+Response on success: `"message": "upgrade completed: ghcr.io/taalib25/runtime-node-core:v0.2.0"`
+
+Timeouts: 6 min for deployment ready + 2 min for health check. Auto-rollback fires if either fails.
+
+### Terminal
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/instances/{id}/exec` | WebSocket exec into pod (auth via `?token=` short-lived token) |
+| POST | `/v1/instances/{id}/terminal/recreate` | Issue a new terminal session token |
+
+### Config
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/instances/{id}/config/providers` | List configured AI providers |
+| POST | `/v1/instances/{id}/config/providers` | Add a provider |
+| PUT | `/v1/instances/{id}/config/providers/{name}` | Update provider API key |
+| DELETE | `/v1/instances/{id}/config/providers/{name}` | Remove a provider |
+| PUT | `/v1/instances/{id}/config/model` | Set active provider + model |
+
+Valid providers: `openai`, `anthropic`, `gemini`, `groq`, `nous`, `opencode-go`, `opencode-zen`, `mistral`, `openrouter`, `minimax`, `glm`, `kimi`, `huggingface`, `ai-gateway`
+
+### Integrations & Agents
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/instances/{id}/integrations` | List messaging integrations |
+| POST | `/v1/instances/{id}/integrations/{platform}` | Enable integration |
+| DELETE | `/v1/instances/{id}/integrations/{platform}` | Disable integration |
+| GET | `/v1/agents` | List agent templates |
+| POST | `/v1/agents` | Create agent template |
+| GET | `/v1/agents/{agentId}` | Get agent template |
+| PUT | `/v1/agents/{agentId}` | Update agent template |
+| DELETE | `/v1/agents/{agentId}` | Delete agent template |
+| POST | `/v1/instances/{id}/agent` | Apply agent template to instance |
+| GET | `/v1/instances/{id}/agent` | Get instance's agent config |
+
+---
+
+## Create Response
 
 ```json
 {
-  "workspaceId": "ws-12345",
+  "instanceId": "ws-2d434ac4914de483",
+  "clusterId": "hermes-test",
+  "status": "provisioning",
+  "url": "https://ws-2d434ac4914de483.hermeshq.net",
+  "dashboardUrl": "https://dash-ws-2d434ac4914de483.hermeshq.net",
+  "secrets": {
+    "API_SERVER_KEY": "f75d0a..."
+  }
+}
+```
+
+The backend should store `clusterId` alongside `instanceId` to route future calls to the correct bridge.
+
+---
+
+## Operation Object
+
+```json
+{
+  "id": "abc123",
+  "type": "upgrade",
+  "instanceId": "ws-2d434ac4914de483",
+  "status": "running | succeeded | failed",
+  "message": "upgrade completed: ghcr.io/taalib25/runtime-node-core:v0.2.0",
+  "error": "",
+  "startedAt": "2026-05-18T12:00:00Z",
+  "completedAt": "2026-05-18T12:03:00Z"
+}
+```
+
+---
+
+## Instance Spec (POST/PUT body)
+
+```json
+{
+  "instanceId": "ws-2d434ac4914de483",
   "tenantId": "tenant-abc",
-  "clusterId": "hermes-prod",
-  "namespace": "hermes-workspaces",
-  "image": "hermes-agent:latest",
-  "imageTag": "v1.2.3",
-  "imagePullPolicy": "IfNotPresent",
+  "image": "ghcr.io/taalib25/runtime-node-core",
+  "imageTag": "0.1.0",
+  "runtimeMode": "runtime-node-core",
+  "plan": "free | pro | enterprise",
+  "namespace": "ws-2d434ac4914de483",
+  "createNamespace": true,
+  "ingressEnabled": true,
+  "network": {
+    "host": "hermeshq.net",
+    "subdomain": "ws-2d434ac4914de483"
+  },
   "resources": {
     "cpuRequest": "100m",
     "cpuLimit": "500m",
-    "memoryRequest": "128Mi",
-    "memoryLimit": "512Mi"
+    "memoryRequest": "256Mi",
+    "memoryLimit": "1Gi"
   },
   "storage": {
     "enabled": true,
     "size": "10Gi",
     "storageClass": "hcloud-volumes"
   },
-  "network": {
-    "host": "workspace.hermeshq.net",
-    "path": "/ws-12345",
-    "ingressClassName": "traefik",
-    "scheme": "https"
-  },
-  "env": [
-    {"name": "LOG_LEVEL", "value": "info"}
-  ],
   "secrets": {
-    "API_KEY": "secret-value"
-  },
-  "healthCheckPath": "/healthz"
+    "API_SERVER_KEY": "reuse-from-create-response"
+  }
 }
 ```
 
-## Deployment
+`API_SERVER_KEY` — generated by the bridge on first create and returned in the response. The backend must pass it back on every subsequent PUT so it isn't rotated.
 
-### Docker
+---
 
-```bash
-docker build -t hermes-bridge:latest ./bridge/
-docker run -e BRIDGE_CLUSTER_NAME=local \
-           -e BRIDGE_CHART_PATH=/app/charts/hermes-agent \
-           -e BRIDGE_SECRET=your-secret \
-           hermes-bridge:latest
-```
+## Purge Delete
 
-### Kubernetes
-
-Apply manifests from `deploy/`:
+Permanently destroys the instance namespace, PVC, and Helm history. Requires two signals:
 
 ```bash
-kubectl apply -f deploy/rbac.yaml
-kubectl apply -f deploy/secret.yaml  # Update secret value first
-kubectl apply -f deploy/deployment.yaml
-kubectl apply -f deploy/service.yaml
-kubectl apply -f deploy/ingress.yaml  # If using ingress
+DELETE /v1/instances/{id}?purge=true
+X-Confirm-Data-Deletion: {id}
 ```
 
-### Helm (from this repo)
+Without `purge=true`, delete keeps the namespace tombstoned and Helm history intact (rollback is possible).
 
-```bash
-helm install hermes-bridge ./charts/hermes-agent \
-  --set bridge.enabled=true \
-  --set bridge.clusterName=hermes-prod \
-  --set bridge.secret=your-secret
-```
+---
+
+## Configuration
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `BRIDGE_CLUSTER_NAME` | *(required)* | Cluster identifier returned on every response |
+| `BRIDGE_CHART_PATH` | *(required)* | Path to the Helm chart directory |
+| `BRIDGE_SECRET` | *(required)* | Shared secret for `X-Bridge-Secret` auth |
+| `BRIDGE_LISTEN_ADDRESS` | `:8080` | HTTP listen address |
+| `BRIDGE_NAMESPACE` | `default` | Default namespace for the bridge itself |
+| `BRIDGE_KUBECONFIG` | *(in-cluster)* | Path to kubeconfig (omit when running in-cluster) |
+| `BRIDGE_SYNC_INTERVAL` | `5m` | Background sync loop interval |
+| `BRIDGE_OPERATION_TIMEOUT` | `10m` | Max duration for async operations |
+| `BRIDGE_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown window |
+| `BRIDGE_HTTP_CLIENT_TIMEOUT` | `5s` | Instance health check HTTP timeout |
+| `BRIDGE_HEALTH_PATH` | `/health` | Path to poll on instances for health |
+| `BRIDGE_RELEASE_PREFIX` | *(empty)* | Prefix prepended to Helm release names |
+| `BRIDGE_CREATE_NAMESPACE` | `false` | Auto-create namespace if missing |
+| `BRIDGE_FORWARD_AUTH_URL` | *(empty)* | Backend auth verify URL (Traefik ForwardAuth) |
+| `BRIDGE_CORS_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins |
+| `BRIDGE_DEFAULT_DOMAIN` | *(empty)* | Domain for auto-generated ingress hosts |
+| `BRIDGE_RUNTIME_NODE_CORE_IMAGE` | `ghcr.io/taalib25/runtime-node-core` | Default image repo |
+| `BRIDGE_RUNTIME_NODE_CORE_TAG` | `0.1.0` | Default image tag |
+
+---
 
 ## Metrics
 
-Prometheus metrics exposed at `/metrics`:
+Prometheus metrics at `/metrics`:
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `hermes_bridge_workspace_count` | Gauge | Active workspace count |
-| `hermes_bridge_operation_latency_seconds` | Histogram | Operation latency |
-| `hermes_bridge_operation_total` | Counter | Total operations by result |
+| `hermes_bridge_instance_count` | Gauge | Active instance count per cluster |
+| `hermes_bridge_instance_health` | Gauge | Per-instance health (1=healthy, 0=unhealthy) |
+| `hermes_bridge_operation_latency_seconds` | Histogram | Op latency by type and result |
+| `hermes_bridge_operation_total` | Counter | Total ops by type and result |
+| `hermes_bridge_http_requests_total` | Counter | HTTP requests by method, path, status |
+| `hermes_bridge_http_request_duration_seconds` | Histogram | HTTP request duration |
 
-## Sync Loop
+---
 
-The bridge runs a periodic sync loop that:
+## Multi-Bridge Setup
 
-1. Lists all Helm releases with `bridge.workspace` metadata
-2. Collects status for each workspace (Deployment, Pod, health check)
-3. Logs alerts for unhealthy or stuck workspaces
-4. Updates Prometheus metrics
+Each bridge manages one cluster. The backend stores `bridgeUrl` (the URL it called) and `clusterId` (from the create response) per instance, then routes all subsequent calls to the correct bridge:
+
+```
+bridge-eu.hermeshq.net  →  k3s cluster EU
+bridge-us.hermeshq.net  →  k3s cluster US
+```
+
+No changes to the bridge itself are needed — deploy the same binary with a different `BRIDGE_CLUSTER_NAME` and kubeconfig.
+
+---
+
+## Image Upgrade Pipeline
+
+Recommended flow for upgrading the runtime image across instances:
+
+```
+1. Build + push new image to GHCR (GitHub Action, manually triggered)
+   → ghcr.io/taalib25/runtime-node-core:v0.2.0
+
+2. For each instance to upgrade:
+   POST /v1/instances/{id}/upgrade
+   {"image": "ghcr.io/taalib25/runtime-node-core", "imageTag": "v0.2.0"}
+
+3. Poll GET /v1/operations/{opId} until succeeded or failed
+   → succeeded: "upgrade completed: ghcr.io/taalib25/runtime-node-core:v0.2.0"
+   → failed:    "upgrade failed: ... — rolled back to revision N"
+```
+
+---
 
 ## Development
 
 ```bash
 # Build
-go build -o /tmp/hermes-bridge ./bridge
+go build -o /tmp/hermes-bridge ./bridge/
+
+# Test
+go test ./bridge/... -v -count=1 -timeout 60s
+
+# Vet
+go vet ./bridge/...
 
 # Run locally (requires kubeconfig)
 export BRIDGE_CLUSTER_NAME=local
-export BRIDGE_CHART_PATH=./charts/hermes-agent
+export BRIDGE_CHART_PATH=./charts/runtime-node-core
 export BRIDGE_SECRET=dev-secret
 /tmp/hermes-bridge
 
-# Test
-curl -H "X-Bridge-Secret: dev-secret" http://localhost:8080/v1/workspaces
+# Smoke test
+curl -H "X-Bridge-Secret: dev-secret" http://localhost:8080/healthz
+curl -H "X-Bridge-Secret: dev-secret" http://localhost:8080/v1/instances
 ```
-
-## Comparison: Operator vs Bridge
-
-| Aspect | Operator | Go Bridge |
-|--------|----------|-----------|
-| Deployment | CRD + Controller | Helm release |
-| Lifecycle | Reconcile loop | Sync loop + HTTP |
-| State storage | CRD status | Release config + in-memory |
-| Drift detection | Automatic | Periodic sync |
-| Complexity | High (kubebuilder) | Low (Go + Helm SDK) |
-| Dependencies | controller-runtime | helm.sh/helm/v3 |
-
-## License
-
-See main project LICENSE file.

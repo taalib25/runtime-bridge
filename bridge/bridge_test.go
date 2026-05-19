@@ -180,6 +180,76 @@ func TestHandleCreateInstance_BadBody(t *testing.T) {
 	}
 }
 
+// --- Upgrade handler ---
+
+func TestHandleUpgradeInstance_BadBody(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/"+testWID+"/upgrade", bytes.NewBufferString("{invalid json}"))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	req.Header.Set("Content-Type", "application/json")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleUpgradeInstance_MissingImageTag(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/"+testWID+"/upgrade", bytes.NewBufferString(`{"image":"ghcr.io/taalib25/runtime-node-core"}`))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	req.Header.Set("Content-Type", "application/json")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleUpgradeInstance_ValidBody(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/"+testWID+"/upgrade", bytes.NewBufferString(`{"image":"ghcr.io/taalib25/runtime-node-core","imageTag":"v0.2.0"}`))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	req.Header.Set("Content-Type", "application/json")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["type"] != "upgrade" {
+		t.Errorf("expected type=upgrade, got %v", body["type"])
+	}
+	if body["status"] != "running" {
+		t.Errorf("expected status=running, got %v", body["status"])
+	}
+}
+
+func TestHandleUpgradeInstance_DuplicateInFlight(t *testing.T) {
+	b := newTestBridge("secret")
+
+	// Inject a fake in-flight upgrade op directly into pendingOps.
+	existingOp := &Operation{
+		ID:         "existing-op-id",
+		Type:       "upgrade",
+		InstanceID: testWID,
+		Status:     "running",
+	}
+	b.pendingOps.Store(testWID, existingOp)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/"+testWID+"/upgrade", bytes.NewBufferString(`{"image":"ghcr.io/taalib25/runtime-node-core","imageTag":"v0.2.0"}`))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	req.Header.Set("Content-Type", "application/json")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rr.Code)
+	}
+}
+
 // --- Helpers ---
 
 func TestReleaseName_NoPrefix(t *testing.T) {

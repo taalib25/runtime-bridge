@@ -75,13 +75,13 @@ func (b *Bridge) RestartInstance(ctx context.Context, workspaceID string) error 
 	}
 	b.Logger.Printf("[RestartInstance] Rolling restart triggered for %s (ns=%s)", workspaceID, ns)
 
-	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 5*time.Minute); err != nil {
+	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 6*time.Minute); err != nil {
 		return err
 	}
 	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
 }
 
-// RedeployWorkspace re-runs a Helm upgrade using the spec stored in the release config.
+// RedeployInstance re-runs a Helm upgrade using the spec stored in the release config.
 // PVC, namespace, and release name are preserved; only the chart manifests are reapplied.
 // OverwriteConfig is false so the agent's runtime config.yaml is not touched.
 func (b *Bridge) RedeployInstance(ctx context.Context, workspaceID string) error {
@@ -102,10 +102,57 @@ func (b *Bridge) RedeployInstance(ctx context.Context, workspaceID string) error
 
 	ns := b.workspaceNamespace(spec)
 	releaseName := b.releaseName(workspaceID)
-	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 5*time.Minute); err != nil {
+	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 6*time.Minute); err != nil {
 		return err
 	}
 	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
+}
+
+// UpgradeInstance upgrades the running image to the specified image/tag via Helm upgrade.
+// On health check failure it automatically rolls back to the previous Helm revision.
+// Returns the final image string ("repo:tag") on success.
+func (b *Bridge) UpgradeInstance(ctx context.Context, workspaceID, image, imageTag string) (string, error) {
+	rel, err := b.lookupRelease(ctx, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	previousRevision := rel.Version
+
+	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+	if err != nil {
+		return "", fmt.Errorf("reconstruct spec: %w", err)
+	}
+	if image != "" {
+		spec.Image = image
+	}
+	spec.ImageTag = imageTag
+	spec.OverwriteConfig = false
+
+	if _, err = b.UpdateInstance(ctx, spec); err != nil {
+		return "", fmt.Errorf("helm upgrade: %w", err)
+	}
+
+	ns := b.workspaceNamespace(spec)
+	releaseName := b.releaseName(workspaceID)
+
+	rollback := func(reason error) error {
+		b.Logger.Printf("[UpgradeInstance] %s unhealthy after upgrade, rolling back to revision %d: %v", workspaceID, previousRevision, reason)
+		if rbErr := b.RollbackInstance(ctx, workspaceID, previousRevision); rbErr != nil {
+			return fmt.Errorf("upgrade failed: %v; rollback also failed: %w", reason, rbErr)
+		}
+		return fmt.Errorf("upgrade failed: %v — rolled back to revision %d", reason, previousRevision)
+	}
+
+	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 6*time.Minute); err != nil {
+		return "", rollback(err)
+	}
+	if err := b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute); err != nil {
+		return "", rollback(err)
+	}
+
+	finalImage := fmt.Sprintf("%s:%s", spec.Image, imageTag)
+	b.Logger.Printf("[UpgradeInstance] Upgraded %s to %s", workspaceID, finalImage)
+	return fmt.Sprintf("upgrade completed: %s", finalImage), nil
 }
 
 // RollbackWorkspace rolls the Helm release back to a previous revision.

@@ -49,7 +49,8 @@ type Bridge struct {
 	ready          atomic.Bool
 	mu             sync.RWMutex
 	operations     map[string]*Operation
-	pendingCreates sync.Map // workspaceID → pendingCreate; throttles duplicate creates
+	pendingCreates sync.Map // instanceID → pendingCreate; throttles duplicate creates
+	pendingOps     sync.Map // instanceID → *Operation; throttles duplicate async ops
 	execTokens     sync.Map // token(string) → execToken; short-lived WebSocket auth tokens
 }
 
@@ -166,6 +167,7 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/instances/{id}/redeploy", b.handleRedeployInstance).Methods(http.MethodPost)
 	v1.HandleFunc("/instances/{id}/rollback", b.handleRollbackInstance).Methods(http.MethodPost)
 	v1.HandleFunc("/instances/{id}/repair", b.handleRepairInstance).Methods(http.MethodPost)
+	v1.HandleFunc("/instances/{id}/upgrade", b.handleUpgradeInstance).Methods(http.MethodPost)
 	v1.HandleFunc("/instances/{id}/terminal/recreate", b.handleRecreateTerminal).Methods(http.MethodPost)
 	v1.HandleFunc("/operations/{id}", b.handleGetOperation).Methods(http.MethodGet)
 
@@ -325,6 +327,58 @@ func (b *Bridge) submitOperation(operationType, workspaceID string, fn func(cont
 	return op
 }
 
+// submitInstanceOperation is like submitOperation but enforces one-in-flight per instance.
+// fn returns an optional success message (used verbatim if non-empty) and an error.
+// If an op is already running for instanceID, returns (nil, existingOp) — caller should 409.
+func (b *Bridge) submitInstanceOperation(operationType, instanceID string, fn func(context.Context) (string, error)) (*Operation, *Operation) {
+	op := &Operation{
+		ID:         newOperationID(),
+		Type:       operationType,
+		InstanceID: instanceID,
+		Status:     "running",
+		Message:    fmt.Sprintf("%s scheduled", operationType),
+		StartedAt:  time.Now().UTC(),
+	}
+
+	actual, loaded := b.pendingOps.LoadOrStore(instanceID, op)
+	if loaded {
+		return nil, actual.(*Operation)
+	}
+
+	b.recordOperation(op)
+
+	go func() {
+		defer b.pendingOps.Delete(instanceID)
+
+		ctx, cancel := context.WithTimeout(context.Background(), b.Config.OperationTimeout)
+		defer cancel()
+
+		msg, err := fn(ctx)
+		completedAt := time.Now().UTC()
+		if err != nil {
+			b.updateOperation(op.ID, func(existing *Operation) {
+				existing.Status = "failed"
+				existing.Error = err.Error()
+				existing.Message = fmt.Sprintf("%s failed", operationType)
+				existing.CompletedAt = &completedAt
+			})
+			return
+		}
+
+		successMsg := fmt.Sprintf("%s completed", operationType)
+		if msg != "" {
+			successMsg = msg
+		}
+		b.updateOperation(op.ID, func(existing *Operation) {
+			existing.Status = "succeeded"
+			existing.Message = successMsg
+			existing.CompletedAt = &completedAt
+		})
+	}()
+
+	return op, nil
+}
+
 func (b *Bridge) startOperationCleanup(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Minute)
 	defer ticker.Stop()
@@ -345,6 +399,14 @@ func (b *Bridge) startOperationCleanup(ctx context.Context) {
 			b.pendingCreates.Range(func(k, v any) bool {
 				if rec := v.(pendingCreate); time.Now().After(rec.until) {
 					b.pendingCreates.Delete(k)
+				}
+				return true
+			})
+			// Evict stale pendingOps entries (guarded by goroutine defer, but
+			// clean up any that were abandoned without completing).
+			b.pendingOps.Range(func(k, v any) bool {
+				if op := v.(*Operation); op.CompletedAt != nil {
+					b.pendingOps.Delete(k)
 				}
 				return true
 			})
