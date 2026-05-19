@@ -15,7 +15,7 @@ var platformSecretKeys = map[string][]string{
 	"telegram":    {"TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET"},
 	"discord":     {"DISCORD_BOT_TOKEN"},
 	"slack":       {"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"},
-	"signal":      {}, // no secrets — connects via SIGNAL_HTTP_URL + SIGNAL_ACCOUNT (plain env)
+	"signal":      {"SIGNAL_HTTP_URL", "SIGNAL_ACCOUNT"}, // stored in k8s Secret (chart treats them as secrets)
 	"whatsapp":    {},                   // no secrets — session is QR-based, stored on PVC
 	"dingtalk":    {"DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET"},
 	"feishu":      {"FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_ENCRYPT_KEY", "FEISHU_VERIFICATION_TOKEN"},
@@ -38,7 +38,6 @@ var platformEnvKeys = map[string][]string{
 	"slack":    {"SLACK_ALLOWED_USERS", "SLACK_HOME_CHANNEL", "SLACK_HOME_CHANNEL_NAME"},
 	"whatsapp": {"WHATSAPP_ENABLED", "WHATSAPP_MODE", "WHATSAPP_ALLOWED_USERS", "WHATSAPP_ALLOW_ALL_USERS"},
 	"signal": {
-		"SIGNAL_HTTP_URL", "SIGNAL_ACCOUNT", // connection details (non-secret)
 		"SIGNAL_ALLOWED_USERS", "SIGNAL_GROUP_ALLOWED_USERS",
 		"SIGNAL_HOME_CHANNEL_NAME", "SIGNAL_ALLOW_ALL_USERS", "SIGNAL_IGNORE_STORIES",
 	},
@@ -177,9 +176,6 @@ func (b *Bridge) GetInstanceIntegrations(ctx context.Context, workspaceID string
 		switch platform {
 		case "whatsapp":
 			enabled = envMap["WHATSAPP_ENABLED"] == "true"
-		case "signal":
-			// Signal has no secret tokens — connection is via HTTP URL + account (plain env).
-			enabled = envMap["SIGNAL_HTTP_URL"] != ""
 		default:
 			for _, key := range secretKeys {
 				if secret != nil && len(secret.Data[key]) > 0 {
