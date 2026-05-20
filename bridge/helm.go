@@ -647,7 +647,25 @@ func workspaceSpecFromRelease(defaultInstanceID string, values map[string]any, n
 	// Restore secret key names from extraSecretKeys so any UpdateWorkspace caller
 	// preserves existing secretKeyRef entries without explicit secretKeysFromRelease calls.
 	spec.Secrets = secretKeysFromRelease(values)
+	spec.HermesConfig = hermesConfigFromRelease(values)
 	return spec, nil
+}
+
+// hermesConfigFromRelease extracts the HermesConfig stored under config.values
+// in the Helm release values. Returns a zero HermesConfig if absent.
+func hermesConfigFromRelease(values map[string]any) HermesConfig {
+	configSection, _ := values["config"].(map[string]any)
+	configValues, _ := configSection["values"].(map[string]any)
+	if len(configValues) == 0 {
+		return HermesConfig{}
+	}
+	b, err := json.Marshal(configValues)
+	if err != nil {
+		return HermesConfig{}
+	}
+	var cfg HermesConfig
+	_ = json.Unmarshal(b, &cfg)
+	return cfg
 }
 
 func (b *Bridge) getInstanceStatusFromRelease(ctx context.Context, rel *release.Release, spec InstanceSpec) (InstanceStatus, error) {

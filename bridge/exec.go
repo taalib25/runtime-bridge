@@ -267,3 +267,36 @@ func (b *Bridge) EnsureGatewayRunning(ctx context.Context, workspaceID string) {
 			workspaceID, startErr, strings.TrimSpace(stderr))
 	}
 }
+
+// handleGatewayStatus GET /v1/instances/{id}/gateway/status
+// Runs `hermes gateway status` in the instance pod and returns whether it's running.
+func (b *Bridge) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validInstanceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId"))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	pod, err := b.findExecPod(ctx, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("no running pod: %w", err))
+		return
+	}
+	container := pod.Spec.Containers[0].Name
+
+	stdout, stderr, err := b.podRunCommand(ctx, workspaceID, pod.Name, container,
+		[]string{"hermes", "gateway", "status"})
+
+	output := strings.TrimSpace(stdout)
+	if output == "" {
+		output = strings.TrimSpace(stderr)
+	}
+	writeJSON(w, http.StatusOK, GatewayStatus{
+		InstanceID: workspaceID,
+		Running:    err == nil,
+		Output:     output,
+	})
+}

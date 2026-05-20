@@ -331,6 +331,13 @@ type Operation struct {
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
+// GatewayStatus is the response for GET /v1/instances/{id}/gateway/status.
+type GatewayStatus struct {
+	InstanceID string `json:"instanceId"`
+	Running    bool   `json:"running"`
+	Output     string `json:"output,omitempty"`
+}
+
 type ErrorResponse struct {
 	Error       string `json:"error"`
 	Details     string `json:"details,omitempty"`
