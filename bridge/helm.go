@@ -380,6 +380,10 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"config": map[string]any{
 			"values": hermesConfigToMap(spec.HermesConfig),
 		},
+		// soul.text is the chart's top-level value written to SOUL.md by the init container.
+		// It must be set here separately — config.values.soul is written to config.yaml only,
+		// and the agent reads SOUL.md as a distinct file.
+		"soul": soulValue(spec.HermesConfig.Soul),
 		// extraEnv is the chart's flat map of extra env vars (platform flags, workspace
 		// identity, messaging allowlists, etc.) rendered alongside runtime.env defaults.
 		// extraEnvList is for structured {name,value} env pairs from spec.Env (unused by
@@ -832,6 +836,16 @@ func (b *Bridge) normalizeInstanceSpec(spec InstanceSpec) InstanceSpec {
 		spec.CORSOrigins = b.Config.DefaultCORSOrigins
 	}
 	return spec
+}
+
+// soulValue builds the top-level soul Helm value from a SoulConfig.
+// The chart's configmap template reads soul.text to populate SOUL.md; an empty
+// map means no SOUL.md override (chart default or existing PVC file is used).
+func soulValue(soul *SoulConfig) map[string]any {
+	if soul == nil || soul.Text == "" {
+		return map[string]any{}
+	}
+	return map[string]any{"text": soul.Text}
 }
 
 // hermesConfigToMap converts the typed HermesConfig into the map[string]any

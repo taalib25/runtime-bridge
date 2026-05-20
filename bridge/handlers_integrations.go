@@ -122,7 +122,6 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 		setIfNotEmpty(cfg, "TELEGRAM_GROUP_ALLOWED_USERS", req.GroupAllowedUsers)
 		setIfNotEmpty(cfg, "TELEGRAM_GROUP_ALLOWED_CHATS", req.GroupAllowedChats)
 		setIfNotEmpty(cfg, "TELEGRAM_HOME_CHANNEL", req.HomeChannel)
-		setIfNotEmpty(cfg, "TELEGRAM_HOME_CHANNEL_NAME", req.HomeChannelName)
 		setIfNotEmpty(cfg, "TELEGRAM_WEBHOOK_URL", req.WebhookURL)
 		setIfNotEmpty(cfg, "TELEGRAM_WEBHOOK_PORT", req.WebhookPort)
 
@@ -137,9 +136,7 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 		setIfNotEmpty(cfg, "DISCORD_BOT_TOKEN", req.BotToken)
 		setIfNotEmpty(cfg, "DISCORD_ALLOWED_USERS", req.AllowedUsers)
 		setIfNotEmpty(cfg, "DISCORD_ALLOWED_ROLES", req.AllowedRoles)
-		setIfNotEmpty(cfg, "DISCORD_ALLOWED_CHANNELS", req.AllowedChannels)
 		setIfNotEmpty(cfg, "DISCORD_HOME_CHANNEL", req.HomeChannel)
-		setIfNotEmpty(cfg, "DISCORD_HOME_CHANNEL_NAME", req.HomeChannelName)
 		setIfNotEmpty(cfg, "DISCORD_REQUIRE_MENTION", req.RequireMention)
 		setIfNotEmpty(cfg, "DISCORD_FREE_RESPONSE_CHANNELS", req.FreeResponseChannels)
 		setIfNotEmpty(cfg, "DISCORD_IGNORED_CHANNELS", req.IgnoredChannels)
@@ -158,6 +155,7 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 		setIfNotEmpty(cfg, "SLACK_BOT_TOKEN", req.BotToken)
 		setIfNotEmpty(cfg, "SLACK_APP_TOKEN", req.AppToken)
 		setIfNotEmpty(cfg, "SLACK_ALLOWED_USERS", req.AllowedUsers)
+		setIfNotEmpty(cfg, "SLACK_ALLOWED_CHANNELS", req.AllowedChannels)
 		setIfNotEmpty(cfg, "SLACK_HOME_CHANNEL", req.HomeChannel)
 		setIfNotEmpty(cfg, "SLACK_HOME_CHANNEL_NAME", req.HomeChannelName)
 
@@ -189,7 +187,7 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 		setIfNotEmpty(cfg, "SIGNAL_ACCOUNT", req.Account)
 		setIfNotEmpty(cfg, "SIGNAL_ALLOWED_USERS", req.AllowedUsers)
 		setIfNotEmpty(cfg, "SIGNAL_GROUP_ALLOWED_USERS", req.GroupAllowedUsers)
-		setIfNotEmpty(cfg, "SIGNAL_HOME_CHANNEL_NAME", req.HomeChannelName)
+		setIfNotEmpty(cfg, "SIGNAL_HOME_CHANNEL", req.HomeChannel)
 		if req.AllowAllUsers {
 			cfg["SIGNAL_ALLOW_ALL_USERS"] = "true"
 		}

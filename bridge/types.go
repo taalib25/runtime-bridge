@@ -384,7 +384,6 @@ type TelegramIntegrationRequest struct {
 	GroupAllowedUsers string `json:"groupAllowedUsers,omitempty"`
 	GroupAllowedChats string `json:"groupAllowedChats,omitempty"`
 	HomeChannel       string `json:"homeChannel,omitempty"`
-	HomeChannelName   string `json:"homeChannelName,omitempty"`
 	WebhookURL        string `json:"webhookUrl,omitempty"`
 	WebhookPort       string `json:"webhookPort,omitempty"`
 }
@@ -395,9 +394,7 @@ type DiscordIntegrationRequest struct {
 	BotToken             string `json:"botToken"`
 	AllowedUsers         string `json:"allowedUsers,omitempty"`
 	AllowedRoles         string `json:"allowedRoles,omitempty"`
-	AllowedChannels      string `json:"allowedChannels,omitempty"`
 	HomeChannel          string `json:"homeChannel,omitempty"`
-	HomeChannelName      string `json:"homeChannelName,omitempty"`
 	RequireMention       string `json:"requireMention,omitempty"`
 	FreeResponseChannels string `json:"freeResponseChannels,omitempty"`
 	IgnoredChannels      string `json:"ignoredChannels,omitempty"`
@@ -409,6 +406,7 @@ type SlackIntegrationRequest struct {
 	BotToken        string `json:"botToken"`
 	AppToken        string `json:"appToken"`
 	AllowedUsers    string `json:"allowedUsers,omitempty"`
+	AllowedChannels string `json:"allowedChannels,omitempty"`
 	HomeChannel     string `json:"homeChannel,omitempty"`
 	HomeChannelName string `json:"homeChannelName,omitempty"`
 }
@@ -423,13 +421,13 @@ type WhatsAppIntegrationRequest struct {
 
 // SignalIntegrationRequest enables the Signal messaging integration via signal-cli REST API.
 // HTTPURL is the signal-cli REST API endpoint; Account is the registered phone number.
-// Signal has no secret tokens — connection details are plain env vars.
+// Signal connection details are stored in k8s Secret (SIGNAL_HTTP_URL, SIGNAL_ACCOUNT).
 type SignalIntegrationRequest struct {
 	HTTPURL           string `json:"httpUrl"`
 	Account           string `json:"account"`
 	AllowedUsers      string `json:"allowedUsers,omitempty"`
 	GroupAllowedUsers string `json:"groupAllowedUsers,omitempty"`
-	HomeChannelName   string `json:"homeChannelName,omitempty"`
+	HomeChannel       string `json:"homeChannel,omitempty"`
 	AllowAllUsers     bool   `json:"allowAllUsers,omitempty"`
 	IgnoreStories     bool   `json:"ignoreStories,omitempty"`
 }

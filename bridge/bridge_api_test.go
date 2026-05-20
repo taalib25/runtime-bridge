@@ -543,26 +543,35 @@ func TestDecodeIntegrationCfg_Signal_IgnoreStories(t *testing.T) {
 	}
 }
 
-func TestDecodeIntegrationCfg_Telegram_HomeChannelName(t *testing.T) {
-	cfg, err := decodeIntegrationCfg("telegram", json.RawMessage(`{"botToken":"tok","homeChannelName":"general"}`))
+func TestDecodeIntegrationCfg_Telegram_HomeChannel(t *testing.T) {
+	cfg, err := decodeIntegrationCfg("telegram", json.RawMessage(`{"botToken":"tok","homeChannel":"-1001234567890"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg["TELEGRAM_HOME_CHANNEL_NAME"] != "general" {
-		t.Errorf("expected TELEGRAM_HOME_CHANNEL_NAME=general, got %q", cfg["TELEGRAM_HOME_CHANNEL_NAME"])
+	if cfg["TELEGRAM_HOME_CHANNEL"] != "-1001234567890" {
+		t.Errorf("expected TELEGRAM_HOME_CHANNEL=-1001234567890, got %q", cfg["TELEGRAM_HOME_CHANNEL"])
+	}
+	if _, ok := cfg["TELEGRAM_HOME_CHANNEL_NAME"]; ok {
+		t.Error("TELEGRAM_HOME_CHANNEL_NAME does not exist in the Hermes agent — should not be set")
 	}
 }
 
-func TestDecodeIntegrationCfg_Discord_MissingFields(t *testing.T) {
-	cfg, err := decodeIntegrationCfg("discord", json.RawMessage(`{"botToken":"tok","ignoredChannels":"spam","homeChannelName":"main"}`))
+func TestDecodeIntegrationCfg_Discord_Fields(t *testing.T) {
+	cfg, err := decodeIntegrationCfg("discord", json.RawMessage(`{"botToken":"tok","ignoredChannels":"spam","homeChannel":"C123"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg["DISCORD_IGNORED_CHANNELS"] != "spam" {
 		t.Errorf("expected DISCORD_IGNORED_CHANNELS=spam, got %q", cfg["DISCORD_IGNORED_CHANNELS"])
 	}
-	if cfg["DISCORD_HOME_CHANNEL_NAME"] != "main" {
-		t.Errorf("expected DISCORD_HOME_CHANNEL_NAME=main, got %q", cfg["DISCORD_HOME_CHANNEL_NAME"])
+	if cfg["DISCORD_HOME_CHANNEL"] != "C123" {
+		t.Errorf("expected DISCORD_HOME_CHANNEL=C123, got %q", cfg["DISCORD_HOME_CHANNEL"])
+	}
+	if _, ok := cfg["DISCORD_HOME_CHANNEL_NAME"]; ok {
+		t.Error("DISCORD_HOME_CHANNEL_NAME does not exist in the Hermes agent — should not be set")
+	}
+	if _, ok := cfg["DISCORD_ALLOWED_CHANNELS"]; ok {
+		t.Error("DISCORD_ALLOWED_CHANNELS is not a valid env var — should not be set")
 	}
 }
 
