@@ -209,6 +209,14 @@ func (q *wsSizeQueue) Next() *remotecommand.TerminalSize {
 	return &size
 }
 
+// gatewayRunningFromOutput parses the output of `hermes gateway status`.
+// The command exits 0 in both states, so we read the text instead:
+// running outputs contain "running" without "not running".
+func gatewayRunningFromOutput(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "running") && !strings.Contains(lower, "not running")
+}
+
 // podRunCommand runs a command in the given pod+container and captures stdout/stderr.
 // Non-interactive — no PTY. Returns an error if the command exits non-zero.
 func (b *Bridge) podRunCommand(ctx context.Context, ns, podName, container string, cmd []string) (stdout, stderr string, err error) {
@@ -254,8 +262,8 @@ func (b *Bridge) EnsureGatewayRunning(ctx context.Context, workspaceID string) {
 	}
 	container := pod.Spec.Containers[0].Name
 
-	_, _, err = b.podRunCommand(ctx, workspaceID, pod.Name, container, []string{"hermes", "gateway", "status"})
-	if err == nil {
+	stdout, _, _ := b.podRunCommand(ctx, workspaceID, pod.Name, container, []string{"hermes", "gateway", "status"})
+	if gatewayRunningFromOutput(stdout) {
 		return // already running
 	}
 
@@ -287,16 +295,18 @@ func (b *Bridge) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	container := pod.Spec.Containers[0].Name
 
-	stdout, stderr, err := b.podRunCommand(ctx, workspaceID, pod.Name, container,
+	stdout, stderr, _ := b.podRunCommand(ctx, workspaceID, pod.Name, container,
 		[]string{"hermes", "gateway", "status"})
 
+	// hermes gateway status exits 0 regardless of state — parse output text.
+	running := gatewayRunningFromOutput(stdout)
 	output := strings.TrimSpace(stdout)
 	if output == "" {
 		output = strings.TrimSpace(stderr)
 	}
 	writeJSON(w, http.StatusOK, GatewayStatus{
 		InstanceID: workspaceID,
-		Running:    err == nil,
+		Running:    running,
 		Output:     output,
 	})
 }
