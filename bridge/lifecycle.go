@@ -179,39 +179,125 @@ func (b *Bridge) RollbackInstance(ctx context.Context, workspaceID string, versi
 	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
 }
 
-// RepairWorkspace performs bounded auto-recovery based on the current pod state.
+// RepairInstance performs bounded auto-recovery based on the current pod state.
 // Returns the action taken ("restart", "redeploy", or "none") and any error.
-// Image pull failures are returned as errors — retrying would loop indefinitely.
+// Unrecoverable conditions (image pull, unschedulable, node pressure eviction)
+// are returned as errors — retrying these would loop indefinitely.
 func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string, error) {
 	status, err := b.GetInstanceStatus(ctx, workspaceID)
 	if err != nil {
 		return "", err
 	}
 
+	// --- Unrecoverable: bridge cannot fix these without external action ---
 	switch status.WaitingReason {
 	case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
 		return "", fmt.Errorf("image pull failed; check image/tag and imagePullSecret")
+	case "Unschedulable":
+		return "", fmt.Errorf("pod is unschedulable: cluster may be full or all nodes are cordoned")
+	}
 
-	case "CrashLoopBackOff", "RunContainerError":
+	// --- Check for pod-level eviction (phase=Failed with reason=Evicted) ---
+	// Eviction happens under node memory/disk pressure — must redeploy so
+	// Kubernetes can schedule the pod on a healthy node.
+	if strings.EqualFold(status.PodPhase, string(corev1.PodFailed)) {
+		if podEvicted, msg := b.isPodEvicted(ctx, workspaceID); podEvicted {
+			b.Logger.Printf("[RepairInstance] pod evicted for %s (%s), redeploying", workspaceID, msg)
+			if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+				return "redeploy", err
+			}
+			return "redeploy", nil
+		}
+		// Other Failed phase (e.g. ContainerCannotRun at pod level) → redeploy.
+		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+			return "redeploy", err
+		}
+		return "redeploy", nil
+	}
+
+	// --- Pod exited cleanly: Succeeded means the agent process stopped, restart it ---
+	if strings.EqualFold(status.PodPhase, string(corev1.PodSucceeded)) {
+		b.Logger.Printf("[RepairInstance] pod phase Succeeded for %s (agent exited cleanly), restarting", workspaceID)
+		if err := b.RestartInstance(ctx, workspaceID); err != nil {
+			return "restart", err
+		}
+		return "restart", nil
+	}
+
+	// --- Unknown phase: node lost contact, redeploy to reschedule ---
+	if strings.EqualFold(status.PodPhase, string(corev1.PodUnknown)) {
+		b.Logger.Printf("[RepairInstance] pod phase Unknown for %s (node may be unreachable), redeploying", workspaceID)
+		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+			return "redeploy", err
+		}
+		return "redeploy", nil
+	}
+
+	// --- Container waiting reasons ---
+	switch status.WaitingReason {
+	case "CrashLoopBackOff", "RunContainerError", "PostStartHookError":
 		if err := b.RestartInstance(ctx, workspaceID); err != nil {
 			return "restart", err
 		}
 		return "restart", nil
 
-	case "CreateContainerConfigError", "CreateContainerError":
+	case "CreateContainerConfigError", "CreateContainerError", "ContainerCannotRun":
+		// Config or runtime setup is broken — re-running Helm may fix a bad
+		// secret reference or an incorrect pod spec field.
 		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
 			return "redeploy", err
 		}
 		return "redeploy", nil
-	}
 
-	if strings.EqualFold(status.PodPhase, string(corev1.PodFailed)) {
-		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
-			return "redeploy", err
+	case "OOMKilled":
+		// Container was OOM-killed in its last run; it may be in backoff now.
+		// A restart gives it a fresh memory slate.
+		if err := b.RestartInstance(ctx, workspaceID); err != nil {
+			return "restart", err
 		}
-		return "redeploy", nil
+		return "restart", nil
 	}
 
+	// --- Init container stuck (WaitingReason is "Init:<reason>") ---
+	if strings.HasPrefix(status.WaitingReason, "Init:") {
+		initReason := strings.TrimPrefix(status.WaitingReason, "Init:")
+		switch initReason {
+		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
+			return "", fmt.Errorf("init container image pull failed; check image/tag and imagePullSecret")
+		default:
+			// Init container is crashing or misconfigured — redeploy to reapply
+			// the chart which may correct a misconfigured init container spec.
+			b.Logger.Printf("[RepairInstance] init container stuck (%s) for %s, redeploying", initReason, workspaceID)
+			if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+				return "redeploy", err
+			}
+			return "redeploy", nil
+		}
+	}
+
+	// --- Terminated container: check the current terminated reason directly ---
+	if terminatedReason := b.containerTerminatedReason(ctx, workspaceID); terminatedReason != "" {
+		switch terminatedReason {
+		case "OOMKilled":
+			if err := b.RestartInstance(ctx, workspaceID); err != nil {
+				return "restart", err
+			}
+			return "restart", nil
+		case "ContainerCannotRun":
+			if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+				return "redeploy", err
+			}
+			return "redeploy", nil
+		default:
+			// "Error", "Completed", or anything else — container exited unexpectedly.
+			if err := b.RestartInstance(ctx, workspaceID); err != nil {
+				return "restart", err
+			}
+			return "restart", nil
+		}
+	}
+
+	// --- Fallback: unhealthy but no specific condition detected → try restart ---
 	if !status.Healthy {
 		if err := b.RestartInstance(ctx, workspaceID); err != nil {
 			return "restart", err
@@ -220,6 +306,51 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 	}
 
 	return "none", nil
+}
+
+// isPodEvicted checks whether the pod for the given workspace was evicted by the
+// kubelet (e.g. due to node disk/memory pressure). Returns the eviction message.
+func (b *Bridge) isPodEvicted(ctx context.Context, workspaceID string) (bool, string) {
+	rel, err := b.lookupRelease(ctx, workspaceID)
+	if err != nil {
+		return false, ""
+	}
+	selector := labels.Set{"app.kubernetes.io/instance": rel.Name}.AsSelector().String()
+	pods, err := b.KubeClient.CoreV1().Pods(rel.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return false, ""
+	}
+	for _, pod := range pods.Items {
+		if pod.Status.Phase == corev1.PodFailed && pod.Status.Reason == "Evicted" {
+			return true, pod.Status.Message
+		}
+	}
+	return false, ""
+}
+
+// containerTerminatedReason returns the Terminated.Reason of the first container
+// that is currently in the Terminated state (not last termination). Returns ""
+// when no container is terminated right now.
+func (b *Bridge) containerTerminatedReason(ctx context.Context, workspaceID string) string {
+	rel, err := b.lookupRelease(ctx, workspaceID)
+	if err != nil {
+		return ""
+	}
+	selector := labels.Set{"app.kubernetes.io/instance": rel.Name}.AsSelector().String()
+	pods, err := b.KubeClient.CoreV1().Pods(rel.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return ""
+	}
+	pod := selectPod(pods.Items)
+	if pod == nil {
+		return ""
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" {
+			return cs.State.Terminated.Reason
+		}
+	}
+	return ""
 }
 
 // GetInstanceEvents returns the 50 most recent Kubernetes events for resources
