@@ -477,6 +477,23 @@ type BlueBubblesIntegrationRequest struct {
 	AllowAllUsers bool  `json:"allowAllUsers,omitempty"`
 }
 
+// EmailIntegrationRequest enables the Email messaging integration (IMAP receive + SMTP send).
+// Per-instance: each agent profile gets its own email address.
+// For Cloudflare Email Routing: point a Cloudflare-routed address to a Gmail/SMTP
+// mailbox, then supply those mailbox credentials here.
+type EmailIntegrationRequest struct {
+	Address      string `json:"address"`               // e.g. agent@yourdomain.com
+	Password     string `json:"password"`              // app password or SMTP credential
+	IMAPHost     string `json:"imapHost"`              // e.g. imap.gmail.com
+	SMTPHost     string `json:"smtpHost"`              // e.g. smtp.gmail.com
+	IMAPPort     string `json:"imapPort,omitempty"`    // defaults to 993
+	SMTPPort     string `json:"smtpPort,omitempty"`    // defaults to 587
+	AllowedUsers string `json:"allowedUsers,omitempty"` // comma-separated sender emails
+	HomeAddress  string `json:"homeAddress,omitempty"` // address to use for cron delivery
+	PollInterval string `json:"pollInterval,omitempty"` // seconds between IMAP polls (default 15)
+	AllowAllUsers bool  `json:"allowAllUsers,omitempty"`
+}
+
 // IntegrationsPutRequest is the body for PUT /v1/instances/{id}/integrations.
 // Keys are platform names (telegram, discord, slack, whatsapp, signal, dingtalk,
 // feishu, wecom, bluebubbles). Platforms absent from the map are disabled.

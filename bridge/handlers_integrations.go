@@ -267,8 +267,38 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 			cfg["BLUEBUBBLES_ALLOW_ALL_USERS"] = "true"
 		}
 
+	case "email":
+		var req EmailIntegrationRequest
+		if err := json.Unmarshal(data, &req); err != nil {
+			return nil, fmt.Errorf("invalid request body: %w", err)
+		}
+		if req.Address == "" {
+			return nil, fmt.Errorf("address is required for email")
+		}
+		if req.Password == "" {
+			return nil, fmt.Errorf("password is required for email")
+		}
+		if req.IMAPHost == "" {
+			return nil, fmt.Errorf("imapHost is required for email")
+		}
+		if req.SMTPHost == "" {
+			return nil, fmt.Errorf("smtpHost is required for email")
+		}
+		setIfNotEmpty(cfg, "EMAIL_ADDRESS", req.Address)
+		setIfNotEmpty(cfg, "EMAIL_PASSWORD", req.Password)
+		setIfNotEmpty(cfg, "EMAIL_IMAP_HOST", req.IMAPHost)
+		setIfNotEmpty(cfg, "EMAIL_SMTP_HOST", req.SMTPHost)
+		setIfNotEmpty(cfg, "EMAIL_IMAP_PORT", req.IMAPPort)
+		setIfNotEmpty(cfg, "EMAIL_SMTP_PORT", req.SMTPPort)
+		setIfNotEmpty(cfg, "EMAIL_ALLOWED_USERS", req.AllowedUsers)
+		setIfNotEmpty(cfg, "EMAIL_HOME_ADDRESS", req.HomeAddress)
+		setIfNotEmpty(cfg, "EMAIL_POLL_INTERVAL", req.PollInterval)
+		if req.AllowAllUsers {
+			cfg["EMAIL_ALLOW_ALL_USERS"] = "true"
+		}
+
 	default:
-		return nil, fmt.Errorf("unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, dingtalk, feishu, wecom, bluebubbles", platform)
+		return nil, fmt.Errorf("unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, email, dingtalk, feishu, wecom, bluebubbles", platform)
 	}
 	return cfg, nil
 }
@@ -293,7 +323,7 @@ func (b *Bridge) handleSetIntegrations(w http.ResponseWriter, r *http.Request) {
 	for platform := range desired {
 		if _, ok := platformSecretKeys[platform]; !ok {
 			writeError(w, http.StatusBadRequest, fmt.Errorf(
-				"unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, dingtalk, feishu, wecom, bluebubbles", platform,
+				"unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, email, dingtalk, feishu, wecom, bluebubbles", platform,
 			))
 			return
 		}

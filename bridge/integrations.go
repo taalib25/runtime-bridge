@@ -21,6 +21,9 @@ var platformSecretKeys = map[string][]string{
 	"feishu":      {"FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_ENCRYPT_KEY", "FEISHU_VERIFICATION_TOKEN"},
 	"wecom":       {"WECOM_BOT_ID", "WECOM_SECRET"},
 	"bluebubbles": {"BLUEBUBBLES_SERVER_URL", "BLUEBUBBLES_PASSWORD"},
+	// Email credentials stored as secrets; IMAP/SMTP hosts included because they
+	// may contain auth tokens for services like Cloudflare Email Routing.
+	"email": {"EMAIL_ADDRESS", "EMAIL_PASSWORD", "EMAIL_IMAP_HOST", "EMAIL_IMAP_PORT", "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT"},
 }
 
 // platformEnvKeys lists the plain env var keys for each platform's config.
@@ -45,6 +48,7 @@ var platformEnvKeys = map[string][]string{
 	"feishu":      {"FEISHU_DOMAIN", "FEISHU_CONNECTION_MODE", "FEISHU_ALLOWED_USERS", "FEISHU_HOME_CHANNEL"},
 	"wecom":       {"WECOM_WEBSOCKET_URL", "WECOM_ALLOWED_USERS", "WECOM_HOME_CHANNEL"},
 	"bluebubbles": {"BLUEBUBBLES_WEBHOOK_HOST", "BLUEBUBBLES_WEBHOOK_PORT", "BLUEBUBBLES_ALLOWED_USERS", "BLUEBUBBLES_ALLOW_ALL_USERS"},
+	"email":        {"EMAIL_POLL_INTERVAL", "EMAIL_ALLOWED_USERS", "EMAIL_HOME_ADDRESS", "EMAIL_ALLOW_ALL_USERS"},
 }
 
 // platformAllowedUsersKey maps each platform to its ALLOWED_USERS env var.
@@ -59,6 +63,7 @@ var platformAllowedUsersKey = map[string]string{
 	"feishu":      "FEISHU_ALLOWED_USERS",
 	"wecom":       "WECOM_ALLOWED_USERS",
 	"bluebubbles": "BLUEBUBBLES_ALLOWED_USERS",
+	"email":        "EMAIL_ALLOWED_USERS",
 }
 
 // applyGatewayAllowAll sets GATEWAY_ALLOW_ALL_USERS=true in envMap when no
