@@ -170,12 +170,17 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/instances/{id}/terminal/recreate", b.handleRecreateTerminal).Methods(http.MethodPost)
 	v1.HandleFunc("/operations/{id}", b.handleGetOperation).Methods(http.MethodGet)
 
+	// Instance config (HermesConfig — soul, agent, gateway, model, etc.)
+	v1.HandleFunc("/instances/{id}/config", b.handleGetInstanceConfig).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/config", b.handleSetInstanceConfig).Methods(http.MethodPut)
 	// Provider config
 	v1.HandleFunc("/instances/{id}/config/providers", b.handleGetInstanceProviders).Methods(http.MethodGet)
 	v1.HandleFunc("/instances/{id}/config/providers", b.handleSetInstanceProvider).Methods(http.MethodPost)
 	v1.HandleFunc("/instances/{id}/config/providers/{name}", b.handleUpdateInstanceProvider).Methods(http.MethodPut)
 	v1.HandleFunc("/instances/{id}/config/providers/{name}", b.handleDeleteInstanceProvider).Methods(http.MethodDelete)
 	v1.HandleFunc("/instances/{id}/config/model", b.handleSetInstanceModel).Methods(http.MethodPut)
+	// Gateway health per instance
+	v1.HandleFunc("/instances/{id}/gateway/status", b.handleGatewayStatus).Methods(http.MethodGet)
 
 	// Messaging integrations
 	v1.HandleFunc("/instances/{id}/integrations", b.handleGetInstanceIntegrations).Methods(http.MethodGet)

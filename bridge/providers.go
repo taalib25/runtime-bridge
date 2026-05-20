@@ -227,6 +227,82 @@ func (b *Bridge) SetInstanceModel(ctx context.Context, workspaceID string, req S
 	return nil
 }
 
+// GetInstanceConfig returns the HermesConfig stored in the last Helm release.
+func (b *Bridge) GetInstanceConfig(ctx context.Context, workspaceID string) (HermesConfig, error) {
+	rel, err := b.lookupRelease(ctx, workspaceID)
+	if err != nil {
+		return HermesConfig{}, err
+	}
+	return hermesConfigFromRelease(rel.Config), nil
+}
+
+// SetInstanceConfig merges the caller-supplied HermesConfig fields into the
+// instance's stored config and triggers a Helm upgrade so the next pod start
+// picks up the new config.yaml.
+func (b *Bridge) SetInstanceConfig(ctx context.Context, workspaceID string, incoming HermesConfig) error {
+	rel, err := b.lookupRelease(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	ns := rel.Namespace
+	releaseName := rel.Name
+	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	if err != nil {
+		return fmt.Errorf("reconstruct spec: %w", err)
+	}
+	spec.EnvMap = envMapFromRelease(rel.Config)
+
+	// Merge: incoming fields override stored fields; nil sections are left as-is.
+	existing := spec.HermesConfig
+	if incoming.Model != nil {
+		existing.Model = incoming.Model
+	}
+	if incoming.Agent != nil {
+		existing.Agent = incoming.Agent
+	}
+	if incoming.Terminal != nil {
+		existing.Terminal = incoming.Terminal
+	}
+	if incoming.Display != nil {
+		existing.Display = incoming.Display
+	}
+	if incoming.Browser != nil {
+		existing.Browser = incoming.Browser
+	}
+	if incoming.Memory != nil {
+		existing.Memory = incoming.Memory
+	}
+	if incoming.Compression != nil {
+		existing.Compression = incoming.Compression
+	}
+	if incoming.Security != nil {
+		existing.Security = incoming.Security
+	}
+	if incoming.Voice != nil {
+		existing.Voice = incoming.Voice
+	}
+	if incoming.Auxiliary != nil {
+		existing.Auxiliary = incoming.Auxiliary
+	}
+	if incoming.Gateway != nil {
+		existing.Gateway = incoming.Gateway
+	}
+	if incoming.Session != nil {
+		existing.Session = incoming.Session
+	}
+	if incoming.Soul != nil {
+		existing.Soul = incoming.Soul
+	}
+	spec.HermesConfig = existing
+	spec.OverwriteConfig = true
+
+	if _, err := b.UpdateInstance(ctx, spec); err != nil {
+		return err
+	}
+	b.Logger.Printf("[SetInstanceConfig] Updated config for instance %s", workspaceID)
+	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
+}
+
 func providerNames() []string {
 	names := make([]string, 0, len(providerSecretKeys))
 	for k := range providerSecretKeys {

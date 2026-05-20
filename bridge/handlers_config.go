@@ -8,6 +8,49 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// handleGetInstanceConfig GET /v1/instances/{id}/config
+func (b *Bridge) handleGetInstanceConfig(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validInstanceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
+		return
+	}
+	cfg, err := b.GetInstanceConfig(r.Context(), workspaceID)
+	if err != nil {
+		if isInstanceNotFound(err) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+// handleSetInstanceConfig PUT /v1/instances/{id}/config
+// Accepts a partial HermesConfig — only non-nil sections are merged.
+func (b *Bridge) handleSetInstanceConfig(w http.ResponseWriter, r *http.Request) {
+	workspaceID := mux.Vars(r)["id"]
+	if !validInstanceID(workspaceID) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
+		return
+	}
+	var incoming HermesConfig
+	if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+		return
+	}
+	if err := b.SetInstanceConfig(r.Context(), workspaceID, incoming); err != nil {
+		if isInstanceNotFound(err) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "updated"})
+}
+
 // handleGetInstanceProviders GET /v1/instances/{id}/config/providers
 func (b *Bridge) handleGetInstanceProviders(w http.ResponseWriter, r *http.Request) {
 	workspaceID := mux.Vars(r)["id"]

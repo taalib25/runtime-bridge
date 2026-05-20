@@ -84,6 +84,7 @@ type HermesConfig struct {
 	Voice       *VoiceConfig       `json:"voice,omitempty"`
 	Auxiliary   *AuxiliaryConfig   `json:"auxiliary,omitempty"`
 	Gateway     *GatewayConfig     `json:"gateway,omitempty"`
+	Session     *SessionConfig     `json:"session,omitempty"`
 	Soul        *SoulConfig        `json:"soul,omitempty"`
 }
 
@@ -233,14 +234,20 @@ type AuxModelConfig struct {
 	Timeout int `json:"timeout,omitempty"`
 }
 
-// GatewayConfig controls the API gateway session and multi-user behaviour.
+// GatewayConfig controls multi-user session isolation.
+// Maps to the gateway: section in config.yaml.
 type GatewayConfig struct {
-	// GroupSessionsPerUser creates one session per user in group channels (default true).
+	// GroupSessionsPerUser creates one conversation session per user in group channels (default true).
 	GroupSessionsPerUser *bool `json:"group_sessions_per_user,omitempty"`
-	// SessionResetPolicy: "idle" (default) resets after inactivity; "daily" resets at midnight.
-	SessionResetPolicy string `json:"session_reset_policy,omitempty"`
-	// SessionResetTimeout is the idle minutes before a session is reset (default 1440 = 24h).
-	SessionResetTimeout int `json:"session_reset_timeout,omitempty"`
+}
+
+// SessionConfig controls when the agent resets its conversation context.
+// Maps to the session: section in config.yaml (separate from gateway:).
+type SessionConfig struct {
+	// ResetPolicy: "idle_timeout" | "daily" | "idle_and_daily" | "manual" (default "idle_and_daily").
+	ResetPolicy string `json:"reset_policy,omitempty"`
+	// IdleTimeoutHours resets the session after this many hours of inactivity (default 8).
+	IdleTimeoutHours int `json:"idle_timeout_hours,omitempty"`
 }
 
 // SoulConfig is the agent's SOUL.md — its system prompt and personality.
@@ -331,6 +338,13 @@ type Operation struct {
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
+// GatewayStatus is the response for GET /v1/instances/{id}/gateway/status.
+type GatewayStatus struct {
+	InstanceID string `json:"instanceId"`
+	Running    bool   `json:"running"`
+	Output     string `json:"output,omitempty"`
+}
+
 type ErrorResponse struct {
 	Error       string `json:"error"`
 	Details     string `json:"details,omitempty"`
@@ -377,7 +391,6 @@ type TelegramIntegrationRequest struct {
 	GroupAllowedUsers string `json:"groupAllowedUsers,omitempty"`
 	GroupAllowedChats string `json:"groupAllowedChats,omitempty"`
 	HomeChannel       string `json:"homeChannel,omitempty"`
-	HomeChannelName   string `json:"homeChannelName,omitempty"`
 	WebhookURL        string `json:"webhookUrl,omitempty"`
 	WebhookPort       string `json:"webhookPort,omitempty"`
 }
@@ -388,9 +401,7 @@ type DiscordIntegrationRequest struct {
 	BotToken             string `json:"botToken"`
 	AllowedUsers         string `json:"allowedUsers,omitempty"`
 	AllowedRoles         string `json:"allowedRoles,omitempty"`
-	AllowedChannels      string `json:"allowedChannels,omitempty"`
 	HomeChannel          string `json:"homeChannel,omitempty"`
-	HomeChannelName      string `json:"homeChannelName,omitempty"`
 	RequireMention       string `json:"requireMention,omitempty"`
 	FreeResponseChannels string `json:"freeResponseChannels,omitempty"`
 	IgnoredChannels      string `json:"ignoredChannels,omitempty"`
@@ -402,6 +413,7 @@ type SlackIntegrationRequest struct {
 	BotToken        string `json:"botToken"`
 	AppToken        string `json:"appToken"`
 	AllowedUsers    string `json:"allowedUsers,omitempty"`
+	AllowedChannels string `json:"allowedChannels,omitempty"`
 	HomeChannel     string `json:"homeChannel,omitempty"`
 	HomeChannelName string `json:"homeChannelName,omitempty"`
 }
@@ -416,13 +428,13 @@ type WhatsAppIntegrationRequest struct {
 
 // SignalIntegrationRequest enables the Signal messaging integration via signal-cli REST API.
 // HTTPURL is the signal-cli REST API endpoint; Account is the registered phone number.
-// Signal has no secret tokens — connection details are plain env vars.
+// Signal connection details are stored in k8s Secret (SIGNAL_HTTP_URL, SIGNAL_ACCOUNT).
 type SignalIntegrationRequest struct {
 	HTTPURL           string `json:"httpUrl"`
 	Account           string `json:"account"`
 	AllowedUsers      string `json:"allowedUsers,omitempty"`
 	GroupAllowedUsers string `json:"groupAllowedUsers,omitempty"`
-	HomeChannelName   string `json:"homeChannelName,omitempty"`
+	HomeChannel       string `json:"homeChannel,omitempty"`
 	AllowAllUsers     bool   `json:"allowAllUsers,omitempty"`
 	IgnoreStories     bool   `json:"ignoreStories,omitempty"`
 }
@@ -462,6 +474,23 @@ type BlueBubblesIntegrationRequest struct {
 	WebhookHost  string `json:"webhookHost,omitempty"`
 	WebhookPort  string `json:"webhookPort,omitempty"`
 	AllowedUsers string `json:"allowedUsers,omitempty"`
+	AllowAllUsers bool  `json:"allowAllUsers,omitempty"`
+}
+
+// EmailIntegrationRequest enables the Email messaging integration (IMAP receive + SMTP send).
+// Per-instance: each agent profile gets its own email address.
+// For Cloudflare Email Routing: point a Cloudflare-routed address to a Gmail/SMTP
+// mailbox, then supply those mailbox credentials here.
+type EmailIntegrationRequest struct {
+	Address      string `json:"address"`               // e.g. agent@yourdomain.com
+	Password     string `json:"password"`              // app password or SMTP credential
+	IMAPHost     string `json:"imapHost"`              // e.g. imap.gmail.com
+	SMTPHost     string `json:"smtpHost"`              // e.g. smtp.gmail.com
+	IMAPPort     string `json:"imapPort,omitempty"`    // defaults to 993
+	SMTPPort     string `json:"smtpPort,omitempty"`    // defaults to 587
+	AllowedUsers string `json:"allowedUsers,omitempty"` // comma-separated sender emails
+	HomeAddress  string `json:"homeAddress,omitempty"` // address to use for cron delivery
+	PollInterval string `json:"pollInterval,omitempty"` // seconds between IMAP polls (default 15)
 	AllowAllUsers bool  `json:"allowAllUsers,omitempty"`
 }
 

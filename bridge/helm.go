@@ -380,6 +380,10 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"config": map[string]any{
 			"values": hermesConfigToMap(spec.HermesConfig),
 		},
+		// soul.text is the chart's top-level value written to SOUL.md by the init container.
+		// It must be set here separately — config.values.soul is written to config.yaml only,
+		// and the agent reads SOUL.md as a distinct file.
+		"soul": soulValue(spec.HermesConfig.Soul),
 		// extraEnv is the chart's flat map of extra env vars (platform flags, workspace
 		// identity, messaging allowlists, etc.) rendered alongside runtime.env defaults.
 		// extraEnvList is for structured {name,value} env pairs from spec.Env (unused by
@@ -647,7 +651,25 @@ func workspaceSpecFromRelease(defaultInstanceID string, values map[string]any, n
 	// Restore secret key names from extraSecretKeys so any UpdateWorkspace caller
 	// preserves existing secretKeyRef entries without explicit secretKeysFromRelease calls.
 	spec.Secrets = secretKeysFromRelease(values)
+	spec.HermesConfig = hermesConfigFromRelease(values)
 	return spec, nil
+}
+
+// hermesConfigFromRelease extracts the HermesConfig stored under config.values
+// in the Helm release values. Returns a zero HermesConfig if absent.
+func hermesConfigFromRelease(values map[string]any) HermesConfig {
+	configSection, _ := values["config"].(map[string]any)
+	configValues, _ := configSection["values"].(map[string]any)
+	if len(configValues) == 0 {
+		return HermesConfig{}
+	}
+	b, err := json.Marshal(configValues)
+	if err != nil {
+		return HermesConfig{}
+	}
+	var cfg HermesConfig
+	_ = json.Unmarshal(b, &cfg)
+	return cfg
 }
 
 func (b *Bridge) getInstanceStatusFromRelease(ctx context.Context, rel *release.Release, spec InstanceSpec) (InstanceStatus, error) {
@@ -816,6 +838,16 @@ func (b *Bridge) normalizeInstanceSpec(spec InstanceSpec) InstanceSpec {
 	return spec
 }
 
+// soulValue builds the top-level soul Helm value from a SoulConfig.
+// The chart's configmap template reads soul.text to populate SOUL.md; an empty
+// map means no SOUL.md override (chart default or existing PVC file is used).
+func soulValue(soul *SoulConfig) map[string]any {
+	if soul == nil || soul.Text == "" {
+		return map[string]any{}
+	}
+	return map[string]any{"text": soul.Text}
+}
+
 // hermesConfigToMap converts the typed HermesConfig into the map[string]any
 // that Helm chart values expect under config.values. Fields with zero/nil values
 // are omitted so chart defaults take effect.
@@ -843,6 +875,7 @@ func isEmptyHermesConfig(cfg HermesConfig) bool {
 		cfg.Voice == nil &&
 		cfg.Auxiliary == nil &&
 		cfg.Gateway == nil &&
+		cfg.Session == nil &&
 		cfg.Soul == nil
 }
 

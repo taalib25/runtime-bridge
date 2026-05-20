@@ -122,7 +122,6 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 		setIfNotEmpty(cfg, "TELEGRAM_GROUP_ALLOWED_USERS", req.GroupAllowedUsers)
 		setIfNotEmpty(cfg, "TELEGRAM_GROUP_ALLOWED_CHATS", req.GroupAllowedChats)
 		setIfNotEmpty(cfg, "TELEGRAM_HOME_CHANNEL", req.HomeChannel)
-		setIfNotEmpty(cfg, "TELEGRAM_HOME_CHANNEL_NAME", req.HomeChannelName)
 		setIfNotEmpty(cfg, "TELEGRAM_WEBHOOK_URL", req.WebhookURL)
 		setIfNotEmpty(cfg, "TELEGRAM_WEBHOOK_PORT", req.WebhookPort)
 
@@ -137,9 +136,7 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 		setIfNotEmpty(cfg, "DISCORD_BOT_TOKEN", req.BotToken)
 		setIfNotEmpty(cfg, "DISCORD_ALLOWED_USERS", req.AllowedUsers)
 		setIfNotEmpty(cfg, "DISCORD_ALLOWED_ROLES", req.AllowedRoles)
-		setIfNotEmpty(cfg, "DISCORD_ALLOWED_CHANNELS", req.AllowedChannels)
 		setIfNotEmpty(cfg, "DISCORD_HOME_CHANNEL", req.HomeChannel)
-		setIfNotEmpty(cfg, "DISCORD_HOME_CHANNEL_NAME", req.HomeChannelName)
 		setIfNotEmpty(cfg, "DISCORD_REQUIRE_MENTION", req.RequireMention)
 		setIfNotEmpty(cfg, "DISCORD_FREE_RESPONSE_CHANNELS", req.FreeResponseChannels)
 		setIfNotEmpty(cfg, "DISCORD_IGNORED_CHANNELS", req.IgnoredChannels)
@@ -158,6 +155,7 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 		setIfNotEmpty(cfg, "SLACK_BOT_TOKEN", req.BotToken)
 		setIfNotEmpty(cfg, "SLACK_APP_TOKEN", req.AppToken)
 		setIfNotEmpty(cfg, "SLACK_ALLOWED_USERS", req.AllowedUsers)
+		setIfNotEmpty(cfg, "SLACK_ALLOWED_CHANNELS", req.AllowedChannels)
 		setIfNotEmpty(cfg, "SLACK_HOME_CHANNEL", req.HomeChannel)
 		setIfNotEmpty(cfg, "SLACK_HOME_CHANNEL_NAME", req.HomeChannelName)
 
@@ -189,7 +187,7 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 		setIfNotEmpty(cfg, "SIGNAL_ACCOUNT", req.Account)
 		setIfNotEmpty(cfg, "SIGNAL_ALLOWED_USERS", req.AllowedUsers)
 		setIfNotEmpty(cfg, "SIGNAL_GROUP_ALLOWED_USERS", req.GroupAllowedUsers)
-		setIfNotEmpty(cfg, "SIGNAL_HOME_CHANNEL_NAME", req.HomeChannelName)
+		setIfNotEmpty(cfg, "SIGNAL_HOME_CHANNEL", req.HomeChannel)
 		if req.AllowAllUsers {
 			cfg["SIGNAL_ALLOW_ALL_USERS"] = "true"
 		}
@@ -269,8 +267,38 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 			cfg["BLUEBUBBLES_ALLOW_ALL_USERS"] = "true"
 		}
 
+	case "email":
+		var req EmailIntegrationRequest
+		if err := json.Unmarshal(data, &req); err != nil {
+			return nil, fmt.Errorf("invalid request body: %w", err)
+		}
+		if req.Address == "" {
+			return nil, fmt.Errorf("address is required for email")
+		}
+		if req.Password == "" {
+			return nil, fmt.Errorf("password is required for email")
+		}
+		if req.IMAPHost == "" {
+			return nil, fmt.Errorf("imapHost is required for email")
+		}
+		if req.SMTPHost == "" {
+			return nil, fmt.Errorf("smtpHost is required for email")
+		}
+		setIfNotEmpty(cfg, "EMAIL_ADDRESS", req.Address)
+		setIfNotEmpty(cfg, "EMAIL_PASSWORD", req.Password)
+		setIfNotEmpty(cfg, "EMAIL_IMAP_HOST", req.IMAPHost)
+		setIfNotEmpty(cfg, "EMAIL_SMTP_HOST", req.SMTPHost)
+		setIfNotEmpty(cfg, "EMAIL_IMAP_PORT", req.IMAPPort)
+		setIfNotEmpty(cfg, "EMAIL_SMTP_PORT", req.SMTPPort)
+		setIfNotEmpty(cfg, "EMAIL_ALLOWED_USERS", req.AllowedUsers)
+		setIfNotEmpty(cfg, "EMAIL_HOME_ADDRESS", req.HomeAddress)
+		setIfNotEmpty(cfg, "EMAIL_POLL_INTERVAL", req.PollInterval)
+		if req.AllowAllUsers {
+			cfg["EMAIL_ALLOW_ALL_USERS"] = "true"
+		}
+
 	default:
-		return nil, fmt.Errorf("unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, dingtalk, feishu, wecom, bluebubbles", platform)
+		return nil, fmt.Errorf("unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, email, dingtalk, feishu, wecom, bluebubbles", platform)
 	}
 	return cfg, nil
 }
@@ -295,7 +323,7 @@ func (b *Bridge) handleSetIntegrations(w http.ResponseWriter, r *http.Request) {
 	for platform := range desired {
 		if _, ok := platformSecretKeys[platform]; !ok {
 			writeError(w, http.StatusBadRequest, fmt.Errorf(
-				"unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, dingtalk, feishu, wecom, bluebubbles", platform,
+				"unsupported platform %q; supported: telegram, discord, slack, whatsapp, signal, email, dingtalk, feishu, wecom, bluebubbles", platform,
 			))
 			return
 		}
