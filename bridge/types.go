@@ -84,6 +84,7 @@ type HermesConfig struct {
 	Voice       *VoiceConfig       `json:"voice,omitempty"`
 	Auxiliary   *AuxiliaryConfig   `json:"auxiliary,omitempty"`
 	Gateway     *GatewayConfig     `json:"gateway,omitempty"`
+	Session     *SessionConfig     `json:"session,omitempty"`
 	Soul        *SoulConfig        `json:"soul,omitempty"`
 }
 
@@ -233,14 +234,20 @@ type AuxModelConfig struct {
 	Timeout int `json:"timeout,omitempty"`
 }
 
-// GatewayConfig controls the API gateway session and multi-user behaviour.
+// GatewayConfig controls multi-user session isolation.
+// Maps to the gateway: section in config.yaml.
 type GatewayConfig struct {
-	// GroupSessionsPerUser creates one session per user in group channels (default true).
+	// GroupSessionsPerUser creates one conversation session per user in group channels (default true).
 	GroupSessionsPerUser *bool `json:"group_sessions_per_user,omitempty"`
-	// SessionResetPolicy: "idle" (default) resets after inactivity; "daily" resets at midnight.
-	SessionResetPolicy string `json:"session_reset_policy,omitempty"`
-	// SessionResetTimeout is the idle minutes before a session is reset (default 1440 = 24h).
-	SessionResetTimeout int `json:"session_reset_timeout,omitempty"`
+}
+
+// SessionConfig controls when the agent resets its conversation context.
+// Maps to the session: section in config.yaml (separate from gateway:).
+type SessionConfig struct {
+	// ResetPolicy: "idle_timeout" | "daily" | "idle_and_daily" | "manual" (default "idle_and_daily").
+	ResetPolicy string `json:"reset_policy,omitempty"`
+	// IdleTimeoutHours resets the session after this many hours of inactivity (default 8).
+	IdleTimeoutHours int `json:"idle_timeout_hours,omitempty"`
 }
 
 // SoulConfig is the agent's SOUL.md — its system prompt and personality.

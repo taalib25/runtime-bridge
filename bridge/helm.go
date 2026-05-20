@@ -875,6 +875,7 @@ func isEmptyHermesConfig(cfg HermesConfig) bool {
 		cfg.Voice == nil &&
 		cfg.Auxiliary == nil &&
 		cfg.Gateway == nil &&
+		cfg.Session == nil &&
 		cfg.Soul == nil
 }
 

@@ -287,6 +287,9 @@ func (b *Bridge) SetInstanceConfig(ctx context.Context, workspaceID string, inco
 	if incoming.Gateway != nil {
 		existing.Gateway = incoming.Gateway
 	}
+	if incoming.Session != nil {
+		existing.Session = incoming.Session
+	}
 	if incoming.Soul != nil {
 		existing.Soul = incoming.Soul
 	}
