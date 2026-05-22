@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -197,8 +198,10 @@ func (b *Bridge) DeleteInstanceProvider(ctx context.Context, workspaceID, provid
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
-// SetWorkspaceModel updates the active model, provider, and optional base URL by
-// performing a Helm upgrade that writes a new config.yaml on the next pod start.
+// SetInstanceModel updates the active model and provider via Deployment env vars.
+// HERMES_INFERENCE_PROVIDER / HERMES_MODEL / HERMES_BASE_URL are the authoritative
+// source — they override config.yaml on every agent invocation, so config.yaml is
+// never rewritten and user-tuned settings are preserved.
 func (b *Bridge) SetInstanceModel(ctx context.Context, workspaceID string, req SetModelRequest) error {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
@@ -210,6 +213,17 @@ func (b *Bridge) SetInstanceModel(ctx context.Context, workspaceID string, req S
 	}
 	spec.EnvMap = envMapFromRelease(rel.Config)
 
+	// Write provider/model as env vars — these win over config.yaml at runtime.
+	spec.EnvMap["HERMES_INFERENCE_PROVIDER"] = req.Provider
+	spec.EnvMap["HERMES_MODEL"] = req.Model
+	spec.EnvMap["HERMES_WEBUI_DEFAULT_MODEL"] = req.Model
+	if req.BaseURL != "" {
+		spec.EnvMap["HERMES_BASE_URL"] = req.BaseURL
+	} else {
+		delete(spec.EnvMap, "HERMES_BASE_URL")
+	}
+
+	// Also persist in HermesConfig so GetInstanceConfig returns accurate data.
 	if spec.HermesConfig.Model == nil {
 		spec.HermesConfig.Model = &ModelConfig{}
 	}
@@ -218,7 +232,7 @@ func (b *Bridge) SetInstanceModel(ctx context.Context, workspaceID string, req S
 	if req.BaseURL != "" {
 		spec.HermesConfig.Model.BaseURL = req.BaseURL
 	}
-	spec.OverwriteConfig = true
+	spec.OverwriteConfig = false
 
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
@@ -237,8 +251,13 @@ func (b *Bridge) GetInstanceConfig(ctx context.Context, workspaceID string) (Her
 }
 
 // SetInstanceConfig merges the caller-supplied HermesConfig fields into the
-// instance's stored config and triggers a Helm upgrade so the next pod start
-// picks up the new config.yaml.
+// instance's stored Helm release config.
+//
+// Soul is handled separately: it is written directly to SOUL.md on the PVC via
+// pod exec — no restart required and config.yaml is never touched.
+// All other sections are stored in the Helm release for persistence across pod
+// restarts; OverwriteConfig is never set so the user's in-pod config.yaml edits
+// are always preserved.
 func (b *Bridge) SetInstanceConfig(ctx context.Context, workspaceID string, incoming HermesConfig) error {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
@@ -252,7 +271,17 @@ func (b *Bridge) SetInstanceConfig(ctx context.Context, workspaceID string, inco
 	}
 	spec.EnvMap = envMapFromRelease(rel.Config)
 
-	// Merge: incoming fields override stored fields; nil sections are left as-is.
+	// Write soul directly to SOUL.md on the PVC — instant, no restart needed.
+	if incoming.Soul != nil && incoming.Soul.Text != "" {
+		if err := b.writeSoulFile(ctx, workspaceID, incoming.Soul.Text); err != nil {
+			b.Logger.Printf("[SetInstanceConfig] soul write failed for %s: %v", workspaceID, err)
+			// Non-fatal: continue to persist in Helm release for next pod start.
+		}
+	}
+
+	// Merge remaining sections into stored HermesConfig.
+	// Soul is stored too so the value survives pod replacement (init container
+	// writes SOUL.md from this on first boot when the PVC is fresh).
 	existing := spec.HermesConfig
 	if incoming.Model != nil {
 		existing.Model = incoming.Model
@@ -294,13 +323,39 @@ func (b *Bridge) SetInstanceConfig(ctx context.Context, workspaceID string, inco
 		existing.Soul = incoming.Soul
 	}
 	spec.HermesConfig = existing
-	spec.OverwriteConfig = true
+	spec.OverwriteConfig = false
 
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
 	b.Logger.Printf("[SetInstanceConfig] Updated config for instance %s", workspaceID)
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
+}
+
+// writeSoulFile writes the soul text directly to SOUL.md on the workspace pod's
+// PVC via a base64-encoded echo to avoid shell escaping issues with arbitrary
+// text. Instant — no pod restart required.
+func (b *Bridge) writeSoulFile(ctx context.Context, workspaceID, text string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	pod, err := b.findExecPod(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("no running pod: %w", err)
+	}
+	container := pod.Spec.Containers[0].Name
+	soulPath := "/home/hermeswebui/.hermes/SOUL.md"
+
+	// Base64-encode the soul text so no shell escaping is needed.
+	encoded := base64.StdEncoding.EncodeToString([]byte(text))
+	cmd := []string{"sh", "-c", fmt.Sprintf("echo %s | base64 -d > %s", encoded, soulPath)}
+
+	_, stderr, err := b.podRunCommand(ctx, workspaceID, pod.Name, container, cmd)
+	if err != nil {
+		return fmt.Errorf("write SOUL.md: %w (stderr: %s)", err, strings.TrimSpace(stderr))
+	}
+	b.Logger.Printf("[writeSoulFile] Wrote SOUL.md for %s (%d bytes)", workspaceID, len(text))
+	return nil
 }
 
 func providerNames() []string {
