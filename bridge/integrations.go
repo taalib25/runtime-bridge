@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"gopkg.in/yaml.v3"
 )
 
 // platformSecretKeys lists the k8s Secret keys required by each messaging platform.
@@ -140,6 +143,15 @@ func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform st
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute); err != nil {
 		return err
 	}
+
+	// Apply platform-specific config.yaml defaults after the pod is ready.
+	// deepMergeNoOverwrite preserves any settings the user has already customised.
+	if defaults := platformConfigDefaults(platform); defaults != nil {
+		if err := b.mergeInstanceConfigYAML(ctx, workspaceID, defaults); err != nil {
+			b.Logger.Printf("[EnableIntegration] config.yaml defaults for %s on %s: %v (non-fatal)", platform, workspaceID, err)
+		}
+	}
+
 	b.EnsureGatewayRunning(ctx, workspaceID)
 	return nil
 }
@@ -344,4 +356,83 @@ func (b *Bridge) SetIntegrations(ctx context.Context, workspaceID string, desire
 	}
 	b.EnsureGatewayRunning(ctx, workspaceID)
 	return nil
+}
+
+// platformConfigDefaults returns the config.yaml overlay to deep-merge when a
+// platform is enabled. Returns nil if no defaults are needed for that platform.
+func platformConfigDefaults(platform string) map[string]any {
+	switch platform {
+	case "telegram":
+		// Reply in-thread when tagged; ignore messages in groups the bot wasn't
+		// explicitly added to. Safe and engaging for friend-group use.
+		return map[string]any{
+			"platforms": map[string]any{
+				"telegram": map[string]any{
+					"reply_to_mode": "all",
+					"guest_mode":    false,
+				},
+			},
+		}
+	default:
+		return nil
+	}
+}
+
+// mergeInstanceConfigYAML reads config.yaml from the running pod, deep-merges
+// overlay into it without overwriting existing user-set values, then writes it
+// back. Non-fatal if the pod isn't running yet — caller logs and continues.
+func (b *Bridge) mergeInstanceConfigYAML(ctx context.Context, workspaceID string, overlay map[string]any) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	pod, err := b.findExecPod(ctx, workspaceID)
+	if err != nil {
+		return fmt.Errorf("no running pod: %w", err)
+	}
+	container := pod.Spec.Containers[0].Name
+	configPath := "/home/hermeswebui/.hermes/config.yaml"
+
+	stdout, stderr, err := b.podRunCommand(ctx, workspaceID, pod.Name, container, []string{"cat", configPath})
+	if err != nil {
+		return fmt.Errorf("read config.yaml: %w (stderr: %s)", err, strings.TrimSpace(stderr))
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(stdout), &doc); err != nil {
+		return fmt.Errorf("parse config.yaml: %w", err)
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	deepMergeNoOverwrite(doc, overlay)
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("marshal config.yaml: %w", err)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(out)
+	cmd := []string{"sh", "-c", fmt.Sprintf("echo %s | base64 -d > %s", encoded, configPath)}
+	if _, stderr, err := b.podRunCommand(ctx, workspaceID, pod.Name, container, cmd); err != nil {
+		return fmt.Errorf("write config.yaml: %w (stderr: %s)", err, strings.TrimSpace(stderr))
+	}
+	return nil
+}
+
+// deepMergeNoOverwrite merges src into dst. Existing scalar values in dst are
+// never overwritten. Maps are recursed into so nested keys can be filled in
+// without clobbering sibling keys the user may have customised.
+func deepMergeNoOverwrite(dst, src map[string]any) {
+	for k, sv := range src {
+		dv, exists := dst[k]
+		if !exists {
+			dst[k] = sv
+			continue
+		}
+		dsm, dstIsMap := dv.(map[string]any)
+		ssm, srcIsMap := sv.(map[string]any)
+		if dstIsMap && srcIsMap {
+			deepMergeNoOverwrite(dsm, ssm)
+		}
+	}
 }
