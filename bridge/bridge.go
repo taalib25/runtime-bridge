@@ -181,6 +181,8 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/instances/{id}/config/model", b.handleSetInstanceModel).Methods(http.MethodPut)
 	// Gateway health per instance
 	v1.HandleFunc("/instances/{id}/gateway/status", b.handleGatewayStatus).Methods(http.MethodGet)
+	// Profiles (proxied from hermes API server)
+	v1.HandleFunc("/instances/{id}/profiles", b.handleGetInstanceProfiles).Methods(http.MethodGet)
 
 	// Messaging integrations
 	v1.HandleFunc("/instances/{id}/integrations", b.handleGetInstanceIntegrations).Methods(http.MethodGet)
