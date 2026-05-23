@@ -61,7 +61,7 @@ func (b *Bridge) handleGetInstanceProviders(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
-	providers, err := b.GetInstanceProviders(r.Context(), workspaceID)
+	body, status, err := b.GetInstanceProviders(r.Context(), workspaceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -70,7 +70,9 @@ func (b *Bridge) handleGetInstanceProviders(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(body) //nolint:errcheck
 }
 
 // handleSetInstanceProvider POST /v1/instances/{id}/config/providers
@@ -212,17 +214,16 @@ func (b *Bridge) handleGetInstanceProfiles(w http.ResponseWriter, r *http.Reques
 	w.Write(body) //nolint:errcheck
 }
 
-// getInstanceProfiles fetches API_SERVER_KEY from the workspace k8s Secret,
-// then calls /api/profiles on the hermes API server running inside the pod via
-// the internal Kubernetes service URL (bypasses Traefik/ForwardAuth).
-func (b *Bridge) getInstanceProfiles(ctx context.Context, workspaceID string) ([]byte, int, error) {
+// proxyHermesAPI fetches API_SERVER_KEY from the workspace k8s Secret, then
+// calls the given path on the hermes API server via the internal Kubernetes
+// service URL (bypasses Traefik/ForwardAuth). Returns the verbatim body and status.
+func (b *Bridge) proxyHermesAPI(ctx context.Context, workspaceID, path string) ([]byte, int, error) {
 	rel, err := b.lookupRelease(ctx, workspaceID)
 	if err != nil {
 		return nil, 0, err
 	}
 	ns := rel.Namespace
 
-	// Fetch API_SERVER_KEY from the bridge-owned workspace Secret.
 	secretName := b.workspaceSecretName(workspaceID)
 	secret, err := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 	if err != nil {
@@ -233,9 +234,8 @@ func (b *Bridge) getInstanceProfiles(ctx context.Context, workspaceID string) ([
 		return nil, 0, fmt.Errorf("API_SERVER_KEY not set for instance %s", workspaceID)
 	}
 
-	// Build internal service URL — same pattern as instanceInternalHealthURL.
 	svc := b.releaseName(workspaceID)
-	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8787/api/profiles", svc, ns)
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:8787%s", svc, ns, path)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -245,7 +245,7 @@ func (b *Bridge) getInstanceProfiles(ctx context.Context, workspaceID string) ([
 
 	resp, err := b.HTTPClient.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("call hermes API: %w", err)
+		return nil, 0, fmt.Errorf("call hermes API %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 
@@ -254,4 +254,9 @@ func (b *Bridge) getInstanceProfiles(ctx context.Context, workspaceID string) ([
 		return nil, 0, fmt.Errorf("read response: %w", err)
 	}
 	return body, resp.StatusCode, nil
+}
+
+// getInstanceProfiles proxies /api/profiles from the hermes API server.
+func (b *Bridge) getInstanceProfiles(ctx context.Context, workspaceID string) ([]byte, int, error) {
+	return b.proxyHermesAPI(ctx, workspaceID, "/api/profiles")
 }

@@ -112,47 +112,12 @@ func (b *Bridge) SetInstanceProvider(ctx context.Context, workspaceID string, re
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
-// GetWorkspaceProviders lists all providers that have API keys set for the workspace.
-// The actual key values are never returned.
-func (b *Bridge) GetInstanceProviders(ctx context.Context, workspaceID string) ([]ProviderInfo, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	ns := rel.Namespace
-	secretName := b.workspaceSecretName(workspaceID)
-
-	secret, err := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return nil, fmt.Errorf("get workspace secret: %w", err)
-	}
-
-	// Determine active provider from Helm release config.
-	activeProvider := ""
-	if cfg, ok := rel.Config["config"].(map[string]any); ok {
-		if vals, ok := cfg["values"].(map[string]any); ok {
-			if model, ok := vals["model"].(map[string]any); ok {
-				activeProvider, _ = model["provider"].(string)
-			}
-		}
-	}
-
-	var infos []ProviderInfo
-	for provider, secretKey := range providerSecretKeys {
-		apiKeySet := false
-		if secret != nil && len(secret.Data[secretKey]) > 0 {
-			apiKeySet = true
-		}
-		if !apiKeySet {
-			continue
-		}
-		infos = append(infos, ProviderInfo{
-			Provider:  provider,
-			APIKeySet: true,
-			Active:    activeProvider == provider,
-		})
-	}
-	return infos, nil
+// GetInstanceProviders proxies /api/providers from the hermes API server running
+// inside the workspace pod. Returns the verbatim response body and HTTP status.
+// The hermes API reads live credentials (.env, k8s Secret env vars, OAuth tokens)
+// so has_key is always accurate — unlike the bridge's own Secret-only view.
+func (b *Bridge) GetInstanceProviders(ctx context.Context, workspaceID string) ([]byte, int, error) {
+	return b.proxyHermesAPI(ctx, workspaceID, "/api/providers")
 }
 
 // DeleteWorkspaceProvider removes a provider's API key from the workspace k8s Secret
