@@ -65,18 +65,22 @@ jobs:
               ghcr.io/taalib25/runtime-node-core:latest
 
             echo "=== Rolling restart of all instance pods ==="
-            KUBECONFIG=$KUBECONFIG kubectl get namespaces \
+            # Prefer labelled namespaces; fall back to ws-* prefix for pre-label instances
+            NAMESPACES=$(KUBECONFIG=$KUBECONFIG kubectl get namespaces \
               -l hermeshq/managed-by=bridge \
-              --no-headers -o custom-columns=':metadata.name' \
-            | xargs -r -I{} \
+              --no-headers -o custom-columns=':metadata.name' 2>/dev/null)
+            if [ -z "$NAMESPACES" ]; then
+              NAMESPACES=$(KUBECONFIG=$KUBECONFIG kubectl get namespaces \
+                --no-headers -o custom-columns=':metadata.name' \
+                | grep '^ws-')
+            fi
+
+            echo "$NAMESPACES" | xargs -r -I{} \
                 KUBECONFIG=$KUBECONFIG kubectl rollout restart deployment \
                   -n {} --ignore-not-found=true
 
             echo "=== Waiting for rollouts to complete ==="
-            KUBECONFIG=$KUBECONFIG kubectl get namespaces \
-              -l hermeshq/managed-by=bridge \
-              --no-headers -o custom-columns=':metadata.name' \
-            | xargs -r -I{} \
+            echo "$NAMESPACES" | xargs -r -I{} \
                 KUBECONFIG=$KUBECONFIG kubectl rollout status deployment \
                   -n {} --timeout=120s 2>/dev/null || true
 
