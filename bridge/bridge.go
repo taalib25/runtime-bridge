@@ -190,6 +190,13 @@ func (b *Bridge) Router() http.Handler {
 	v1.HandleFunc("/instances/{id}/integrations/{platform}", b.handleEnableIntegration).Methods(http.MethodPost)
 	v1.HandleFunc("/instances/{id}/integrations/{platform}", b.handleDisableIntegration).Methods(http.MethodDelete)
 
+	// Admin / diagnostics — backend-only, never called by the frontend directly
+	v1.HandleFunc("/cluster/summary", b.handleGetClusterSummary).Methods(http.MethodGet)
+	v1.HandleFunc("/cluster/resources", b.handleGetClusterResources).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/diagnostics", b.handleGetInstanceDiagnostics).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/logs", b.handleGetInstanceLogs).Methods(http.MethodGet)
+	v1.HandleFunc("/instances/{id}/resources", b.handleGetInstanceResources).Methods(http.MethodGet)
+
 	// Agent templates
 	v1.HandleFunc("/agents", b.handleListAgentTemplates).Methods(http.MethodGet)
 	v1.HandleFunc("/agents", b.handleCreateAgentTemplate).Methods(http.MethodPost)
@@ -493,7 +500,12 @@ func (b *Bridge) lookupRelease(_ context.Context, workspaceID string) (*release.
 }
 
 func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: map[string]string{"hermeshq/managed-by": "bridge"},
+		},
+	}
 	_, err := b.KubeClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	if k8serrors.IsAlreadyExists(err) {
 		return nil
