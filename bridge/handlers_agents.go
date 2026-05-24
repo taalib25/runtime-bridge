@@ -93,8 +93,8 @@ func (b *Bridge) handleDeleteAgentTemplate(w http.ResponseWriter, r *http.Reques
 
 // handleApplyAgentTemplate POST /v1/instances/{id}/agent
 func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
@@ -107,7 +107,7 @@ func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, fmt.Errorf("agentId is required"))
 		return
 	}
-	if err := b.ApplyAgentTemplate(r.Context(), workspaceID, req.AgentID); err != nil {
+	if err := b.ApplyAgentTemplate(r.Context(), instanceID, req.AgentID); err != nil {
 		if isInstanceNotFound(err) || isAgentNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
@@ -116,7 +116,7 @@ func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"instanceId": workspaceID,
+		"instanceId": instanceID,
 		"agentId":     req.AgentID,
 		"status":      "applied",
 	})
@@ -124,12 +124,12 @@ func (b *Bridge) handleApplyAgentTemplate(w http.ResponseWriter, r *http.Request
 
 // handleGetInstanceAgent GET /v1/instances/{id}/agent
 func (b *Bridge) handleGetInstanceAgent(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
-	tmpl, err := b.GetInstanceAgent(r.Context(), workspaceID)
+	tmpl, err := b.GetInstanceAgent(r.Context(), instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)

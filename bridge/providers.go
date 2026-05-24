@@ -36,14 +36,14 @@ var providerSecretKeys = map[string]string{
 	"ai-gateway": "AI_GATEWAY_API_KEY",
 }
 
-// workspaceSecretName returns the k8s Secret name for a workspace's API keys.
+// instanceSecretName returns the k8s Secret name for a workspace's API keys.
 // Matches the chart's runtime-node-core.secretName template when existingSecret is unset.
-func (b *Bridge) workspaceSecretName(workspaceID string) string {
-	return b.releaseName(workspaceID) + "-secrets"
+func (b *Bridge) instanceSecretName(instanceID string) string {
+	return b.releaseName(instanceID) + "-secrets"
 }
 
-// getOrCreateWorkspaceSecret fetches the workspace k8s Secret, creating it if absent.
-func (b *Bridge) getOrCreateWorkspaceSecret(ctx context.Context, ns, secretName string) (*corev1.Secret, error) {
+// getOrCreateInstanceSecret fetches the workspace k8s Secret, creating it if absent.
+func (b *Bridge) getOrCreateInstanceSecret(ctx context.Context, ns, secretName string) (*corev1.Secret, error) {
 	secret, err := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 	if err == nil {
 		return secret, nil
@@ -67,23 +67,23 @@ func (b *Bridge) getOrCreateWorkspaceSecret(ctx context.Context, ns, secretName 
 	return created, nil
 }
 
-// SetWorkspaceProvider stores a provider's API key in the workspace k8s Secret and
+// SetInstanceProvider stores a provider's API key in the workspace k8s Secret and
 // performs a Helm upgrade so the Deployment gets the secretKeyRef for the key, then
 // waits for the rolling update to complete.
-func (b *Bridge) SetInstanceProvider(ctx context.Context, workspaceID string, req ProviderConfigRequest) error {
+func (b *Bridge) SetInstanceProvider(ctx context.Context, instanceID string, req ProviderConfigRequest) error {
 	secretKey, ok := providerSecretKeys[req.Provider]
 	if !ok {
 		return fmt.Errorf("unknown provider %q; valid: %s", req.Provider, strings.Join(providerNames(), ", "))
 	}
-	rel, err := b.lookupRelease(ctx, workspaceID)
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
 	ns := rel.Namespace
 	releaseName := rel.Name
-	secretName := b.workspaceSecretName(workspaceID)
+	secretName := b.instanceSecretName(instanceID)
 
-	secret, err := b.getOrCreateWorkspaceSecret(ctx, ns, secretName)
+	secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName)
 	if err != nil {
 		return err
 	}
@@ -96,8 +96,8 @@ func (b *Bridge) SetInstanceProvider(ctx context.Context, workspaceID string, re
 	}
 
 	// Helm upgrade: register the key in extraSecretKeys so the Deployment references it.
-	// workspaceSpecFromRelease already restores existing secret keys via secretKeysFromRelease.
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	// instanceSpecFromRelease already restores existing secret keys via secretKeysFromRelease.
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, ns, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -108,7 +108,7 @@ func (b *Bridge) SetInstanceProvider(ctx context.Context, workspaceID string, re
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[SetInstanceProvider] Updated %s key for instance %s", req.Provider, workspaceID)
+	b.Logger.Printf("[SetInstanceProvider] Updated %s key for instance %s", req.Provider, instanceID)
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
@@ -116,24 +116,24 @@ func (b *Bridge) SetInstanceProvider(ctx context.Context, workspaceID string, re
 // inside the workspace pod. Returns the verbatim response body and HTTP status.
 // The hermes API reads live credentials (.env, k8s Secret env vars, OAuth tokens)
 // so has_key is always accurate — unlike the bridge's own Secret-only view.
-func (b *Bridge) GetInstanceProviders(ctx context.Context, workspaceID string) ([]byte, int, error) {
-	return b.proxyHermesAPI(ctx, workspaceID, "/api/providers")
+func (b *Bridge) GetInstanceProviders(ctx context.Context, instanceID string) ([]byte, int, error) {
+	return b.proxyHermesAPI(ctx, instanceID, "/api/providers")
 }
 
-// DeleteWorkspaceProvider removes a provider's API key from the workspace k8s Secret
+// DeleteInstanceProvider removes a provider's API key from the workspace k8s Secret
 // and performs a Helm upgrade to remove the secretKeyRef from the Deployment.
-func (b *Bridge) DeleteInstanceProvider(ctx context.Context, workspaceID, provider string) error {
+func (b *Bridge) DeleteInstanceProvider(ctx context.Context, instanceID, provider string) error {
 	secretKey, ok := providerSecretKeys[provider]
 	if !ok {
 		return fmt.Errorf("unknown provider %q", provider)
 	}
-	rel, err := b.lookupRelease(ctx, workspaceID)
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
 	ns := rel.Namespace
 	releaseName := rel.Name
-	secretName := b.workspaceSecretName(workspaceID)
+	secretName := b.instanceSecretName(instanceID)
 
 	secret, err := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 	if k8serrors.IsNotFound(err) {
@@ -148,7 +148,7 @@ func (b *Bridge) DeleteInstanceProvider(ctx context.Context, workspaceID, provid
 	}
 
 	// Helm upgrade: remove the key from extraSecretKeys so the Deployment no longer references it.
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, ns, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -159,7 +159,7 @@ func (b *Bridge) DeleteInstanceProvider(ctx context.Context, workspaceID, provid
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[DeleteInstanceProvider] Removed %s key for instance %s", provider, workspaceID)
+	b.Logger.Printf("[DeleteInstanceProvider] Removed %s key for instance %s", provider, instanceID)
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
@@ -167,12 +167,12 @@ func (b *Bridge) DeleteInstanceProvider(ctx context.Context, workspaceID, provid
 // HERMES_INFERENCE_PROVIDER / HERMES_MODEL / HERMES_BASE_URL are the authoritative
 // source — they override config.yaml on every agent invocation, so config.yaml is
 // never rewritten and user-tuned settings are preserved.
-func (b *Bridge) SetInstanceModel(ctx context.Context, workspaceID string, req SetModelRequest) error {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) SetInstanceModel(ctx context.Context, instanceID string, req SetModelRequest) error {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -202,13 +202,13 @@ func (b *Bridge) SetInstanceModel(ctx context.Context, workspaceID string, req S
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[SetInstanceModel] Updated model=%s provider=%s for instance %s", req.Model, req.Provider, workspaceID)
+	b.Logger.Printf("[SetInstanceModel] Updated model=%s provider=%s for instance %s", req.Model, req.Provider, instanceID)
 	return nil
 }
 
 // GetInstanceConfig returns the HermesConfig stored in the last Helm release.
-func (b *Bridge) GetInstanceConfig(ctx context.Context, workspaceID string) (HermesConfig, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) GetInstanceConfig(ctx context.Context, instanceID string) (HermesConfig, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return HermesConfig{}, err
 	}
@@ -223,14 +223,14 @@ func (b *Bridge) GetInstanceConfig(ctx context.Context, workspaceID string) (Her
 // All other sections are stored in the Helm release for persistence across pod
 // restarts; OverwriteConfig is never set so the user's in-pod config.yaml edits
 // are always preserved.
-func (b *Bridge) SetInstanceConfig(ctx context.Context, workspaceID string, incoming HermesConfig) error {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) SetInstanceConfig(ctx context.Context, instanceID string, incoming HermesConfig) error {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
 	ns := rel.Namespace
 	releaseName := rel.Name
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, ns, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -238,8 +238,8 @@ func (b *Bridge) SetInstanceConfig(ctx context.Context, workspaceID string, inco
 
 	// Write soul directly to SOUL.md on the PVC — instant, no restart needed.
 	if incoming.Soul != nil && incoming.Soul.Text != "" {
-		if err := b.writeSoulFile(ctx, workspaceID, incoming.Soul.Text); err != nil {
-			b.Logger.Printf("[SetInstanceConfig] soul write failed for %s: %v", workspaceID, err)
+		if err := b.writeSoulFile(ctx, instanceID, incoming.Soul.Text); err != nil {
+			b.Logger.Printf("[SetInstanceConfig] soul write failed for %s: %v", instanceID, err)
 			// Non-fatal: continue to persist in Helm release for next pod start.
 		}
 	}
@@ -293,18 +293,18 @@ func (b *Bridge) SetInstanceConfig(ctx context.Context, workspaceID string, inco
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[SetInstanceConfig] Updated config for instance %s", workspaceID)
+	b.Logger.Printf("[SetInstanceConfig] Updated config for instance %s", instanceID)
 	return b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute)
 }
 
 // writeSoulFile writes the soul text directly to SOUL.md on the workspace pod's
 // PVC via a base64-encoded echo to avoid shell escaping issues with arbitrary
 // text. Instant — no pod restart required.
-func (b *Bridge) writeSoulFile(ctx context.Context, workspaceID, text string) error {
+func (b *Bridge) writeSoulFile(ctx context.Context, instanceID, text string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	pod, err := b.findExecPod(ctx, workspaceID)
+	pod, err := b.findExecPod(ctx, instanceID)
 	if err != nil {
 		return fmt.Errorf("no running pod: %w", err)
 	}
@@ -315,11 +315,11 @@ func (b *Bridge) writeSoulFile(ctx context.Context, workspaceID, text string) er
 	encoded := base64.StdEncoding.EncodeToString([]byte(text))
 	cmd := []string{"sh", "-c", fmt.Sprintf("echo %s | base64 -d > %s", encoded, soulPath)}
 
-	_, stderr, err := b.podRunCommand(ctx, workspaceID, pod.Name, container, cmd)
+	_, stderr, err := b.podRunCommand(ctx, instanceID, pod.Name, container, cmd)
 	if err != nil {
 		return fmt.Errorf("write SOUL.md: %w (stderr: %s)", err, strings.TrimSpace(stderr))
 	}
-	b.Logger.Printf("[writeSoulFile] Wrote SOUL.md for %s (%d bytes)", workspaceID, len(text))
+	b.Logger.Printf("[writeSoulFile] Wrote SOUL.md for %s (%d bytes)", instanceID, len(text))
 	return nil
 }
 

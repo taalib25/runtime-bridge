@@ -11,12 +11,12 @@ import (
 
 // handleGetInstanceIntegrations GET /v1/instances/{id}/integrations
 func (b *Bridge) handleGetInstanceIntegrations(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
-	statuses, err := b.GetInstanceIntegrations(r.Context(), workspaceID)
+	statuses, err := b.GetInstanceIntegrations(r.Context(), instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -31,9 +31,9 @@ func (b *Bridge) handleGetInstanceIntegrations(w http.ResponseWriter, r *http.Re
 // handleEnableIntegration POST /v1/instances/{id}/integrations/{platform}
 func (b *Bridge) handleEnableIntegration(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	workspaceID := vars["id"]
+	instanceID := vars["id"]
 	platform := vars["platform"]
-	if !validInstanceID(workspaceID) {
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
@@ -45,7 +45,7 @@ func (b *Bridge) handleEnableIntegration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := b.EnableIntegration(r.Context(), workspaceID, platform, cfg); err != nil {
+	if err := b.EnableIntegration(r.Context(), instanceID, platform, cfg); err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
@@ -65,13 +65,13 @@ func (b *Bridge) handleEnableIntegration(w http.ResponseWriter, r *http.Request)
 // handleDisableIntegration DELETE /v1/instances/{id}/integrations/{platform}
 func (b *Bridge) handleDisableIntegration(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	workspaceID := vars["id"]
+	instanceID := vars["id"]
 	platform := vars["platform"]
-	if !validInstanceID(workspaceID) {
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
-	if err := b.DisableIntegration(r.Context(), workspaceID, platform); err != nil {
+	if err := b.DisableIntegration(r.Context(), instanceID, platform); err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
@@ -307,8 +307,8 @@ func decodeIntegrationCfg(platform string, data json.RawMessage) (map[string]str
 // Converges the instance to exactly the set of platforms in the request body.
 // Platforms absent from the body are disabled; an empty body disables all.
 func (b *Bridge) handleSetIntegrations(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
@@ -329,8 +329,8 @@ func (b *Bridge) handleSetIntegrations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	op := b.submitOperation("set-integrations", workspaceID, func(ctx context.Context) error {
-		return b.SetIntegrations(ctx, workspaceID, desired)
+	op := b.submitOperation("set-integrations", instanceID, func(ctx context.Context) error {
+		return b.SetIntegrations(ctx, instanceID, desired)
 	})
 	writeJSON(w, http.StatusAccepted, op)
 }

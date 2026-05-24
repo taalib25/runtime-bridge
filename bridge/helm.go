@@ -36,9 +36,9 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		return nil, err
 	}
 
-	b.Logger.Printf("[CreateInstance] Using release name %s, namespace %s", b.releaseName(spec.InstanceID), b.workspaceNamespace(spec))
+	b.Logger.Printf("[CreateInstance] Using release name %s, namespace %s", b.releaseName(spec.InstanceID), b.instanceNamespace(spec))
 
-	ns := b.workspaceNamespace(spec)
+	ns := b.instanceNamespace(spec)
 	helmCfg, err := b.helmConfigForNamespace(ns)
 	if err != nil {
 		b.trackOperation("create", "failure", started)
@@ -57,7 +57,7 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 	// (e.g. API_SERVER_KEY). The Secret must exist before the Deployment starts so
 	// secretKeyRef env vars resolve correctly.
 	if len(spec.Secrets) > 0 {
-		wsSecret, err := b.getOrCreateWorkspaceSecret(ctx, ns, b.workspaceSecretName(spec.InstanceID))
+		wsSecret, err := b.getOrCreateInstanceSecret(ctx, ns, b.instanceSecretName(spec.InstanceID))
 		if err != nil {
 			b.trackOperation("create", "failure", started)
 			return nil, fmt.Errorf("seed workspace secret: %w", err)
@@ -159,14 +159,14 @@ func (b *Bridge) deleteHelmIngress(ctx context.Context, namespace string) {
 // purge=true: after uninstall, permanently deletes the namespace and everything
 // in it — PVC data, session history, user-installed tools. Irreversible.
 // The handler enforces X-Confirm-Data-Deletion before setting purge=true.
-func (b *Bridge) DeleteInstance(ctx context.Context, workspaceID string, purge bool) error {
+func (b *Bridge) DeleteInstance(ctx context.Context, instanceID string, purge bool) error {
 	started := time.Now()
 
 	// Write tombstone before uninstalling so the record survives even if
 	// the uninstall itself fails. Idempotent — safe for QStash retries.
-	b.writeTombstone(ctx, workspaceID)
+	b.writeTombstone(ctx, instanceID)
 
-	helmCfg, err := b.helmConfigForNamespace(workspaceID)
+	helmCfg, err := b.helmConfigForNamespace(instanceID)
 	if err != nil {
 		b.trackOperation("delete", "failure", started)
 		return fmt.Errorf("helm config: %w", err)
@@ -174,7 +174,7 @@ func (b *Bridge) DeleteInstance(ctx context.Context, workspaceID string, purge b
 	uninstall := action.NewUninstall(helmCfg)
 	uninstall.Wait = false
 	uninstall.KeepHistory = !purge
-	_, err = uninstall.Run(b.releaseName(workspaceID))
+	_, err = uninstall.Run(b.releaseName(instanceID))
 	if err != nil {
 		if strings.Contains(err.Error(), "release: not found") ||
 			strings.Contains(err.Error(), "already uninstalled") {
@@ -185,33 +185,33 @@ func (b *Bridge) DeleteInstance(ctx context.Context, workspaceID string, purge b
 		return err
 	}
 	// Best-effort: remove Traefik routing resources.
-	if mwErr := b.DeleteIngressRoute(ctx, workspaceID); mwErr != nil {
+	if mwErr := b.DeleteIngressRoute(ctx, instanceID); mwErr != nil {
 		b.Logger.Printf("[DeleteInstance] Warning: failed to delete IngressRoute: %v", mwErr)
 	}
-	if mwErr := b.DeleteDashboardIngressRoute(ctx, workspaceID); mwErr != nil {
+	if mwErr := b.DeleteDashboardIngressRoute(ctx, instanceID); mwErr != nil {
 		b.Logger.Printf("[DeleteInstance] Warning: failed to delete dashboard IngressRoute: %v", mwErr)
 	}
-	if mwErr := b.DeleteForwardAuthMiddleware(ctx, workspaceID); mwErr != nil {
+	if mwErr := b.DeleteForwardAuthMiddleware(ctx, instanceID); mwErr != nil {
 		b.Logger.Printf("[DeleteInstance] Warning: failed to delete ForwardAuth middleware: %v", mwErr)
 	}
-	if mwErr := b.DeleteCORSMiddleware(ctx, workspaceID); mwErr != nil {
+	if mwErr := b.DeleteCORSMiddleware(ctx, instanceID); mwErr != nil {
 		b.Logger.Printf("[DeleteInstance] Warning: failed to delete CORS middleware: %v", mwErr)
 	}
-	b.Metrics.InstanceHealth.DeleteLabelValues(b.ClusterName, workspaceID)
+	b.Metrics.InstanceHealth.DeleteLabelValues(b.ClusterName, instanceID)
 
 	if purge {
-		if err := b.KubeClient.CoreV1().Namespaces().Delete(ctx, workspaceID, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-			b.Logger.Printf("[DeleteInstance] Warning: failed to delete namespace %s: %v", workspaceID, err)
+		if err := b.KubeClient.CoreV1().Namespaces().Delete(ctx, instanceID, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
+			b.Logger.Printf("[DeleteInstance] Warning: failed to delete namespace %s: %v", instanceID, err)
 		} else {
-			b.Logger.Printf("[DeleteInstance] Purged namespace %s — all data permanently deleted", workspaceID)
+			b.Logger.Printf("[DeleteInstance] Purged namespace %s — all data permanently deleted", instanceID)
 		}
 		b.trackOperation("delete", "success", started)
-		b.Logger.Printf("[DeleteInstance] Purged instance %s — namespace, PVC, and history destroyed", workspaceID)
+		b.Logger.Printf("[DeleteInstance] Purged instance %s — namespace, PVC, and history destroyed", instanceID)
 		return nil
 	}
 
 	b.trackOperation("delete", "success", started)
-	b.Logger.Printf("[DeleteInstance] Deleted release %s (namespace preserved with tombstone + helm history)", workspaceID)
+	b.Logger.Printf("[DeleteInstance] Deleted release %s (namespace preserved with tombstone + helm history)", instanceID)
 	return nil
 }
 
@@ -220,8 +220,8 @@ func (b *Bridge) DeleteInstance(ctx context.Context, workspaceID string, purge b
 // Helm release history (--keep-history). The tombstone marks it as logically
 // deleted so operators and tooling know not to treat it as active.
 // This is idempotent: calling it twice just updates the timestamp.
-func (b *Bridge) writeTombstone(ctx context.Context, workspaceID string) {
-	ns, err := b.KubeClient.CoreV1().Namespaces().Get(ctx, workspaceID, metav1.GetOptions{})
+func (b *Bridge) writeTombstone(ctx context.Context, instanceID string) {
+	ns, err := b.KubeClient.CoreV1().Namespaces().Get(ctx, instanceID, metav1.GetOptions{})
 	if err != nil {
 		// Namespace may not exist (already deleted or never created) — not an error.
 		return
@@ -233,7 +233,7 @@ func (b *Bridge) writeTombstone(ctx context.Context, workspaceID string) {
 	ns.Annotations["hermes.io/deleted-by"] = "bridge"
 	ns.Annotations["hermes.io/release-preserved"] = "true"
 	if _, err := b.KubeClient.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
-		b.Logger.Printf("[DeleteInstance] Warning: failed to write tombstone annotation to namespace %s: %v", workspaceID, err)
+		b.Logger.Printf("[DeleteInstance] Warning: failed to write tombstone annotation to namespace %s: %v", instanceID, err)
 	}
 }
 
@@ -251,7 +251,7 @@ func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		return nil, err
 	}
 
-	ns := b.workspaceNamespace(spec)
+	ns := b.instanceNamespace(spec)
 	helmCfg, err := b.helmConfigForNamespace(ns)
 	if err != nil {
 		b.trackOperation("update", "failure", started)
@@ -320,14 +320,14 @@ func (b *Bridge) ListInstances(ctx context.Context) ([]InstanceStatus, error) {
 	statuses := make([]InstanceStatus, 0, len(releases))
 	for _, rel := range releases {
 		b.Logger.Printf("[ListInstances] Processing release %s (namespace: %s)", rel.Name, rel.Namespace)
-		spec, err := workspaceSpecFromRelease(rel.Name, rel.Config, rel.Namespace, b.ClusterName)
+		spec, err := instanceSpecFromRelease(rel.Name, rel.Config, rel.Namespace, b.ClusterName)
 		if err != nil {
 			b.Logger.Printf("[ListInstances] Skipping release %s: %v", rel.Name, err)
 			continue
 		}
 		status, err := b.getInstanceStatusFromRelease(ctx, rel, spec)
 		if err != nil {
-			b.Logger.Printf("[ListInstances] Failed to collect workspace status for %s: %v", spec.InstanceID, err)
+			b.Logger.Printf("[ListInstances] Failed to collect instance status for %s: %v", spec.InstanceID, err)
 			continue
 		}
 		statuses = append(statuses, status)
@@ -336,7 +336,7 @@ func (b *Bridge) ListInstances(ctx context.Context) ([]InstanceStatus, error) {
 	sort.Slice(statuses, func(i, j int) bool {
 		return statuses[i].InstanceID < statuses[j].InstanceID
 	})
-	b.Logger.Printf("[ListInstances] Returning %d valid workspaces", len(statuses))
+	b.Logger.Printf("[ListInstances] Returning %d valid instances", len(statuses))
 	b.Metrics.InstanceCount.WithLabelValues(b.ClusterName).Set(float64(len(statuses)))
 	return statuses, nil
 }
@@ -390,7 +390,7 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"extraSecretKeys": buildExtraSecretKeys(spec.Secrets),
 		"secrets": map[string]any{
 			"create":         false,
-			"existingSecret": b.workspaceSecretName(spec.InstanceID),
+			"existingSecret": b.instanceSecretName(spec.InstanceID),
 		},
 		"resources": map[string]any{
 			"requests": map[string]any{},
@@ -588,7 +588,7 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 	return values, nil
 }
 
-func workspaceSpecFromRelease(defaultInstanceID string, values map[string]any, namespace, clusterName string) (InstanceSpec, error) {
+func instanceSpecFromRelease(defaultInstanceID string, values map[string]any, namespace, clusterName string) (InstanceSpec, error) {
 	bridgeValues, _ := values["bridge"].(map[string]any)
 	instanceValues, _ := bridgeValues["instance"].(map[string]any)
 	if len(instanceValues) == 0 {
@@ -596,12 +596,12 @@ func workspaceSpecFromRelease(defaultInstanceID string, values map[string]any, n
 	}
 
 	spec := InstanceSpec{
-		InstanceID: workspaceString(instanceValues, "instanceId", defaultInstanceID),
-		TenantID:    workspaceString(instanceValues, "tenantId", ""),
-		ClusterID:   workspaceString(instanceValues, "clusterId", clusterName),
-		Namespace:   workspaceString(instanceValues, "namespace", namespace),
-		Image:       workspaceString(instanceValues, "image", ""),
-		ImageTag:    workspaceString(instanceValues, "imageTag", ""),
+		InstanceID: instanceString(instanceValues, "instanceId", defaultInstanceID),
+		TenantID:    instanceString(instanceValues, "tenantId", ""),
+		ClusterID:   instanceString(instanceValues, "clusterId", clusterName),
+		Namespace:   instanceString(instanceValues, "namespace", namespace),
+		Image:       instanceString(instanceValues, "image", ""),
+		ImageTag:    instanceString(instanceValues, "imageTag", ""),
 		Resources: ResourceSpec{
 			CPURequest:    nestedString(instanceValues, "resources", "cpuRequest"),
 			CPULimit:      nestedString(instanceValues, "resources", "cpuLimit"),
@@ -620,8 +620,8 @@ func workspaceSpecFromRelease(defaultInstanceID string, values map[string]any, n
 			Scheme:           nestedString(instanceValues, "network", "scheme"),
 			HealthPath:       nestedString(instanceValues, "network", "healthPath"),
 		},
-		HealthCheckPath: workspaceString(instanceValues, "healthCheckPath", ""),
-		RuntimeMode:     workspaceString(instanceValues, "runtimeMode", ""),
+		HealthCheckPath: instanceString(instanceValues, "healthCheckPath", ""),
+		RuntimeMode:     instanceString(instanceValues, "runtimeMode", ""),
 	}
 	// Restore RuntimePort — JSON numbers unmarshal as float64.
 	if portRaw, ok := instanceValues["runtimePort"]; ok {
@@ -644,7 +644,7 @@ func workspaceSpecFromRelease(defaultInstanceID string, values map[string]any, n
 	if spec.RuntimePort == 0 {
 		spec.RuntimePort = 8787
 	}
-	// Restore secret key names from extraSecretKeys so any UpdateWorkspace caller
+	// Restore secret key names from extraSecretKeys so any UpdateInstance caller
 	// preserves existing secretKeyRef entries without explicit secretKeysFromRelease calls.
 	spec.Secrets = secretKeysFromRelease(values)
 	spec.HermesConfig = hermesConfigFromRelease(values)
@@ -716,7 +716,7 @@ func envValues(values []EnvVar) []map[string]any {
 	return result
 }
 
-func workspaceString(values map[string]any, key, fallback string) string {
+func instanceString(values map[string]any, key, fallback string) string {
 	if raw, ok := values[key]; ok {
 		if str, ok := raw.(string); ok && strings.TrimSpace(str) != "" {
 			return str
@@ -730,7 +730,7 @@ func nestedString(values map[string]any, parent, key string) string {
 	if child == nil {
 		return ""
 	}
-	return workspaceString(child, key, "")
+	return instanceString(child, key, "")
 }
 
 func (s InstanceSpec) ingressEnabled() bool {
@@ -797,7 +797,7 @@ func (b *Bridge) normalizeInstanceSpec(spec InstanceSpec) InstanceSpec {
 	if spec.Network.Scheme == "" {
 		spec.Network.Scheme = "https"
 	}
-	// Derive host from workspaceID + default domain when not explicitly set.
+	// Derive host from instanceID + default domain when not explicitly set.
 	// host() combines Subdomain + Host, so Host must be just the base domain.
 	// If caller passed a full hostname in Host with no Subdomain, leave it alone.
 	if spec.Network.Host == "" && strings.TrimSpace(b.Config.DefaultDomain) != "" {
@@ -805,7 +805,7 @@ func (b *Bridge) normalizeInstanceSpec(spec InstanceSpec) InstanceSpec {
 			// Caller set a subdomain — use the bare domain as Host.
 			spec.Network.Host = b.Config.DefaultDomain
 		} else {
-			// No subdomain — default subdomain to workspaceID, Host to domain.
+			// No subdomain — default subdomain to instanceID, Host to domain.
 			spec.Network.Subdomain = spec.InstanceID
 			spec.Network.Host = b.Config.DefaultDomain
 		}

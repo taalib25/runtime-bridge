@@ -29,20 +29,20 @@ func (b *Bridge) handleListInstances(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	spec, err := b.decodeInstanceRequest(r, workspaceID)
+	instanceID := mux.Vars(r)["id"]
+	spec, err := b.decodeInstanceRequest(r, instanceID)
 	if err != nil {
-		b.Logger.Printf("[CreateWorkspace] validation failed for %s: %v", workspaceID, err)
+		b.Logger.Printf("[CreateInstance] validation failed for %s: %v", instanceID, err)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
 	// Throttle: if a create is already in-flight for this instance, return the
 	// existing key immediately without launching another Helm install.
-	if v, ok := b.pendingCreates.Load(workspaceID); ok {
+	if v, ok := b.pendingCreates.Load(instanceID); ok {
 		if rec := v.(pendingCreate); time.Now().Before(rec.until) {
 			writeJSON(w, http.StatusAccepted, map[string]any{
-				"instanceId":  workspaceID,
+				"instanceId":  instanceID,
 				"clusterId":   b.ClusterName,
 				"status":       "provisioning",
 				"url":          instanceURL(spec),
@@ -54,7 +54,7 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := b.checkClusterCapacity(r.Context()); err != nil {
-		b.Logger.Printf("[CreateWorkspace] Capacity check failed for %s: %v", workspaceID, err)
+		b.Logger.Printf("[CreateInstance] Capacity check failed for %s: %v", instanceID, err)
 		writeError(w, http.StatusServiceUnavailable, err)
 		return
 	}
@@ -69,18 +69,18 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	apiKey := spec.Secrets["API_SERVER_KEY"]
 
-	b.pendingCreates.Store(workspaceID, pendingCreate{
+	b.pendingCreates.Store(instanceID, pendingCreate{
 		apiKey: apiKey,
 		until:  time.Now().Add(b.Config.OperationTimeout),
 	})
 
-	b.submitOperation("create", workspaceID, func(ctx context.Context) error {
+	b.submitOperation("create", instanceID, func(ctx context.Context) error {
 		_, err := b.CreateInstance(ctx, spec)
 		return err
 	})
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"instanceId":  workspaceID,
+		"instanceId":  instanceID,
 		"clusterId":   b.ClusterName,
 		"status":       "provisioning",
 		"url":          instanceURL(spec),
@@ -90,12 +90,12 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleGetInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	instance, err := b.getInstance(r.Context(), workspaceID)
+	instance, err := b.getInstance(r.Context(), instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -108,8 +108,8 @@ func (b *Bridge) handleGetInstance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
@@ -117,7 +117,7 @@ func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	// Sync existence check before submitting the async operation. Without this,
 	// a PUT on a non-existent instance returns 202 and silently fails ~10min
 	// later — QStash would mark the delivery as successful despite the failure.
-	if _, err := b.lookupRelease(r.Context(), workspaceID); err != nil {
+	if _, err := b.lookupRelease(r.Context(), instanceID); err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
 			return
@@ -126,7 +126,7 @@ func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	spec, err := b.decodeInstanceRequest(r, workspaceID)
+	spec, err := b.decodeInstanceRequest(r, instanceID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -136,7 +136,7 @@ func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	// A PUT for resources/plan only (no config field) must NOT wipe user's runtime edits.
 	spec.OverwriteConfig = !isEmptyHermesConfig(spec.HermesConfig)
 
-	op := b.submitOperation("update", workspaceID, func(ctx context.Context) error {
+	op := b.submitOperation("update", instanceID, func(ctx context.Context) error {
 		_, err := b.UpdateInstance(ctx, spec)
 		return err
 	})
@@ -144,34 +144,34 @@ func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
 	purge := r.URL.Query().Get("purge") == "true"
 	if purge {
 		confirm := r.Header.Get("X-Confirm-Data-Deletion")
-		if confirm != workspaceID {
+		if confirm != instanceID {
 			writeError(w, http.StatusBadRequest, fmt.Errorf(
-				"purge=true requires header X-Confirm-Data-Deletion: %s — this permanently destroys all instance data including the PVC", workspaceID,
+				"purge=true requires header X-Confirm-Data-Deletion: %s — this permanently destroys all instance data including the PVC", instanceID,
 			))
 			return
 		}
 	}
-	op := b.submitOperation("delete", workspaceID, func(ctx context.Context) error {
-		return b.DeleteInstance(ctx, workspaceID, purge)
+	op := b.submitOperation("delete", instanceID, func(ctx context.Context) error {
+		return b.DeleteInstance(ctx, instanceID, purge)
 	})
 	writeJSON(w, http.StatusAccepted, op)
 }
 
 func (b *Bridge) handleGetStatus(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	status, err := b.GetInstanceStatus(r.Context(), workspaceID)
+	status, err := b.GetInstanceStatus(r.Context(), instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -184,12 +184,12 @@ func (b *Bridge) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleHealth(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	status, err := b.GetInstanceStatus(r.Context(), workspaceID)
+	status, err := b.GetInstanceStatus(r.Context(), instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -203,7 +203,7 @@ func (b *Bridge) handleHealth(w http.ResponseWriter, r *http.Request) {
 		code = http.StatusServiceUnavailable
 	}
 	writeJSON(w, code, map[string]any{
-		"instanceId": workspaceID,
+		"instanceId": instanceID,
 		"healthy":     status.Healthy,
 		"phase":       status.Phase,
 		"url":         status.URL,
@@ -235,12 +235,12 @@ func (b *Bridge) handleGetOperation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleListInstanceOperations(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	ops := b.runner.ListForInstance(workspaceID)
+	ops := b.runner.ListForInstance(instanceID)
 	sort.Slice(ops, func(i, j int) bool {
 		return ops[i].StartedAt.After(ops[j].StartedAt)
 	})
@@ -258,40 +258,40 @@ func (b *Bridge) handleListInstanceOperations(w http.ResponseWriter, r *http.Req
 }
 
 func (b *Bridge) handleRestartInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	op, existing := b.submitInstanceOperation("restart", workspaceID, func(ctx context.Context) (string, error) {
-		return "", b.RestartInstance(ctx, workspaceID)
+	op, existing := b.submitInstanceOperation("restart", instanceID, func(ctx context.Context) (string, error) {
+		return "", b.RestartInstance(ctx, instanceID)
 	})
 	if existing != nil {
-		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", instanceID, existing.ID))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
 func (b *Bridge) handleRedeployInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	op, existing := b.submitInstanceOperation("redeploy", workspaceID, func(ctx context.Context) (string, error) {
-		return "", b.RedeployInstance(ctx, workspaceID)
+	op, existing := b.submitInstanceOperation("redeploy", instanceID, func(ctx context.Context) (string, error) {
+		return "", b.RedeployInstance(ctx, instanceID)
 	})
 	if existing != nil {
-		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", instanceID, existing.ID))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
 func (b *Bridge) handleRollbackInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
@@ -301,36 +301,36 @@ func (b *Bridge) handleRollbackInstance(w http.ResponseWriter, r *http.Request) 
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck — empty body or missing version defaults to 0 (previous release)
 	}
-	op, existing := b.submitInstanceOperation("rollback", workspaceID, func(ctx context.Context) (string, error) {
-		return "", b.RollbackInstance(ctx, workspaceID, req.Version)
+	op, existing := b.submitInstanceOperation("rollback", instanceID, func(ctx context.Context) (string, error) {
+		return "", b.RollbackInstance(ctx, instanceID, req.Version)
 	})
 	if existing != nil {
-		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", instanceID, existing.ID))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
 func (b *Bridge) handleRepairInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	op, existing := b.submitInstanceOperation("repair", workspaceID, func(ctx context.Context) (string, error) {
-		_, err := b.RepairInstance(ctx, workspaceID)
+	op, existing := b.submitInstanceOperation("repair", instanceID, func(ctx context.Context) (string, error) {
+		_, err := b.RepairInstance(ctx, instanceID)
 		return "", err
 	})
 	if existing != nil {
-		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", instanceID, existing.ID))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
 func (b *Bridge) handleUpgradeInstance(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
@@ -346,23 +346,23 @@ func (b *Bridge) handleUpgradeInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("imageTag is required"))
 		return
 	}
-	op, existing := b.submitInstanceOperation("upgrade", workspaceID, func(ctx context.Context) (string, error) {
-		return b.UpgradeInstance(ctx, workspaceID, req.Image, req.ImageTag)
+	op, existing := b.submitInstanceOperation("upgrade", instanceID, func(ctx context.Context) (string, error) {
+		return b.UpgradeInstance(ctx, instanceID, req.Image, req.ImageTag)
 	})
 	if existing != nil {
-		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", workspaceID, existing.ID))
+		writeError(w, http.StatusConflict, fmt.Errorf("operation already in progress for instance %s (op: %s)", instanceID, existing.ID))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, op)
 }
 
 func (b *Bridge) handleGetEvents(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	events, err := b.GetInstanceEvents(r.Context(), workspaceID)
+	events, err := b.GetInstanceEvents(r.Context(), instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -371,16 +371,16 @@ func (b *Bridge) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"instanceId": workspaceID, "items": events})
+	writeJSON(w, http.StatusOK, map[string]any{"instanceId": instanceID, "items": events})
 }
 
 func (b *Bridge) handleRecreateTerminal(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
 		return
 	}
-	session, err := b.RecreateTerminalSession(r.Context(), workspaceID)
+	session, err := b.RecreateTerminalSession(r.Context(), instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -392,16 +392,16 @@ func (b *Bridge) handleRecreateTerminal(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, session)
 }
 
-func (b *Bridge) decodeInstanceRequest(r *http.Request, workspaceID string) (InstanceSpec, error) {
+func (b *Bridge) decodeInstanceRequest(r *http.Request, instanceID string) (InstanceSpec, error) {
 	var spec InstanceSpec
 	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
 		return InstanceSpec{}, fmt.Errorf("decode request body: %w", err)
 	}
-	if spec.InstanceID != "" && spec.InstanceID != workspaceID {
+	if spec.InstanceID != "" && spec.InstanceID != instanceID {
 		return InstanceSpec{}, fmt.Errorf("instanceId in body must match path parameter")
 	}
-	spec.InstanceID = workspaceID
-	if !validInstanceID(workspaceID) {
+	spec.InstanceID = instanceID
+	if !validInstanceID(instanceID) {
 		return InstanceSpec{}, fmt.Errorf("instanceId must match ws-[0-9a-f]{16}")
 	}
 	if strings.TrimSpace(spec.TenantID) == "" {

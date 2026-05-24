@@ -11,7 +11,7 @@ import (
 
 // ResourcesResponse is the payload for GET /v1/instances/{id}/resources.
 type ResourcesResponse struct {
-	WorkspaceID string             `json:"workspaceId"`
+	InstanceID string             `json:"instanceId"`
 	Namespace   string             `json:"namespace"`
 	Deployments []DeploymentInfo   `json:"deployments"`
 	Pods        []PodInfo          `json:"pods"`
@@ -63,8 +63,8 @@ type IngressInfo struct {
 	Hosts []string `json:"hosts,omitempty"`
 }
 
-func (b *Bridge) GetInstanceResources(ctx context.Context, workspaceID string) (ResourcesResponse, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) GetInstanceResources(ctx context.Context, instanceID string) (ResourcesResponse, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return ResourcesResponse{}, err
 	}
@@ -76,7 +76,7 @@ func (b *Bridge) GetInstanceResources(ctx context.Context, workspaceID string) (
 	allOpts := metav1.ListOptions{}
 
 	out := ResourcesResponse{
-		WorkspaceID: workspaceID,
+		InstanceID: instanceID,
 		Namespace:   ns,
 	}
 

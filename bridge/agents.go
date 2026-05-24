@@ -126,16 +126,16 @@ func (b *Bridge) DeleteAgentTemplate(ctx context.Context, agentID string) error 
 // ApplyAgentTemplate applies a template's HermesConfig to the workspace via Helm upgrade.
 // If the template has a Soul field, it is included in the config values so the chart's
 // init container can write it to SOUL.md on next pod start.
-func (b *Bridge) ApplyAgentTemplate(ctx context.Context, workspaceID, agentID string) error {
+func (b *Bridge) ApplyAgentTemplate(ctx context.Context, instanceID, agentID string) error {
 	tmpl, err := b.GetAgentTemplate(ctx, agentID)
 	if err != nil {
 		return err
 	}
-	rel, err := b.lookupRelease(ctx, workspaceID)
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -154,7 +154,7 @@ func (b *Bridge) ApplyAgentTemplate(ctx context.Context, workspaceID, agentID st
 		return err
 	}
 
-	// Annotate the workspace namespace so GetWorkspaceAgent can identify the applied template.
+	// Annotate the workspace namespace so GetInstanceAgent can identify the applied template.
 	ns, err := b.KubeClient.CoreV1().Namespaces().Get(ctx, rel.Namespace, metav1.GetOptions{})
 	if err == nil {
 		if ns.Annotations == nil {
@@ -164,14 +164,14 @@ func (b *Bridge) ApplyAgentTemplate(ctx context.Context, workspaceID, agentID st
 		_, _ = b.KubeClient.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
 	}
 
-	b.Logger.Printf("[ApplyAgentTemplate] Applied template %s to workspace %s", agentID, workspaceID)
+	b.Logger.Printf("[ApplyAgentTemplate] Applied template %s to instance %s", agentID, instanceID)
 	return b.waitForDeploymentReady(ctx, rel.Namespace, rel.Name, 5*time.Minute)
 }
 
-// GetWorkspaceAgent returns the agent template currently applied to the workspace,
+// GetInstanceAgent returns the agent template currently applied to the workspace,
 // or nil if no template has been applied.
-func (b *Bridge) GetInstanceAgent(ctx context.Context, workspaceID string) (*AgentTemplate, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) GetInstanceAgent(ctx context.Context, instanceID string) (*AgentTemplate, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return nil, err
 	}

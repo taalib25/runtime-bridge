@@ -271,7 +271,7 @@ func TestInstanceNamespace_FromSpec(t *testing.T) {
 	b := newTestBridge("s")
 	b.Config.Namespace = "default"
 	spec := InstanceSpec{Namespace: "tenant-ns"}
-	if got := b.workspaceNamespace(spec); got != "tenant-ns" {
+	if got := b.instanceNamespace(spec); got != "tenant-ns" {
 		t.Errorf("expected tenant-ns, got %s", got)
 	}
 }
@@ -280,7 +280,7 @@ func TestInstanceNamespace_FallbackToConfig(t *testing.T) {
 	b := newTestBridge("s")
 	b.Config.Namespace = "default"
 	spec := InstanceSpec{}
-	if got := b.workspaceNamespace(spec); got != "default" {
+	if got := b.instanceNamespace(spec); got != "default" {
 		t.Errorf("expected default, got %s", got)
 	}
 }

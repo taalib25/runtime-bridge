@@ -41,11 +41,11 @@ type TerminalSession struct {
 	Token string `json:"token"`
 }
 
-// RestartWorkspace triggers a rolling restart of the workspace Deployment by
+// RestartInstance triggers a rolling restart of the instance Deployment by
 // patching the pod template annotation (same mechanism as kubectl rollout restart).
 // It then waits for the deployment to become ready and the health probe to pass.
-func (b *Bridge) RestartInstance(ctx context.Context, workspaceID string) error {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) RestartInstance(ctx context.Context, instanceID string) error {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func (b *Bridge) RestartInstance(ctx context.Context, workspaceID string) error 
 		return fmt.Errorf("list deployments: %w", err)
 	}
 	if len(deployments.Items) == 0 {
-		return fmt.Errorf("no deployments found for workspace %s", workspaceID)
+		return fmt.Errorf("no deployments found for instance %s", instanceID)
 	}
 
 	patch := fmt.Sprintf(
@@ -73,23 +73,23 @@ func (b *Bridge) RestartInstance(ctx context.Context, workspaceID string) error 
 			return fmt.Errorf("patch deployment %s: %w", dep.Name, patchErr)
 		}
 	}
-	b.Logger.Printf("[RestartInstance] Rolling restart triggered for %s (ns=%s)", workspaceID, ns)
+	b.Logger.Printf("[RestartInstance] Rolling restart triggered for %s (ns=%s)", instanceID, ns)
 
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 6*time.Minute); err != nil {
 		return err
 	}
-	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
+	return b.waitForInstanceHealth(ctx, instanceID, 2*time.Minute)
 }
 
 // RedeployInstance re-runs a Helm upgrade using the spec stored in the release config.
 // PVC, namespace, and release name are preserved; only the chart manifests are reapplied.
 // OverwriteConfig is false so the agent's runtime config.yaml is not touched.
-func (b *Bridge) RedeployInstance(ctx context.Context, workspaceID string) error {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) RedeployInstance(ctx context.Context, instanceID string) error {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -98,27 +98,27 @@ func (b *Bridge) RedeployInstance(ctx context.Context, workspaceID string) error
 	if _, err = b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[RedeployInstance] Redeployed %s", workspaceID)
+	b.Logger.Printf("[RedeployInstance] Redeployed %s", instanceID)
 
-	ns := b.workspaceNamespace(spec)
-	releaseName := b.releaseName(workspaceID)
+	ns := b.instanceNamespace(spec)
+	releaseName := b.releaseName(instanceID)
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 6*time.Minute); err != nil {
 		return err
 	}
-	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
+	return b.waitForInstanceHealth(ctx, instanceID, 2*time.Minute)
 }
 
 // UpgradeInstance upgrades the running image to the specified image/tag via Helm upgrade.
 // On health check failure it automatically rolls back to the previous Helm revision.
 // Returns the final image string ("repo:tag") on success.
-func (b *Bridge) UpgradeInstance(ctx context.Context, workspaceID, image, imageTag string) (string, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) UpgradeInstance(ctx context.Context, instanceID, image, imageTag string) (string, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return "", err
 	}
 	previousRevision := rel.Version
 
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
 		return "", fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -132,12 +132,12 @@ func (b *Bridge) UpgradeInstance(ctx context.Context, workspaceID, image, imageT
 		return "", fmt.Errorf("helm upgrade: %w", err)
 	}
 
-	ns := b.workspaceNamespace(spec)
-	releaseName := b.releaseName(workspaceID)
+	ns := b.instanceNamespace(spec)
+	releaseName := b.releaseName(instanceID)
 
 	rollback := func(reason error) error {
-		b.Logger.Printf("[UpgradeInstance] %s unhealthy after upgrade, rolling back to revision %d: %v", workspaceID, previousRevision, reason)
-		if rbErr := b.RollbackInstance(ctx, workspaceID, previousRevision); rbErr != nil {
+		b.Logger.Printf("[UpgradeInstance] %s unhealthy after upgrade, rolling back to revision %d: %v", instanceID, previousRevision, reason)
+		if rbErr := b.RollbackInstance(ctx, instanceID, previousRevision); rbErr != nil {
 			return fmt.Errorf("upgrade failed: %v; rollback also failed: %w", reason, rbErr)
 		}
 		return fmt.Errorf("upgrade failed: %v — rolled back to revision %d", reason, previousRevision)
@@ -146,20 +146,20 @@ func (b *Bridge) UpgradeInstance(ctx context.Context, workspaceID, image, imageT
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 6*time.Minute); err != nil {
 		return "", rollback(err)
 	}
-	if err := b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute); err != nil {
+	if err := b.waitForInstanceHealth(ctx, instanceID, 2*time.Minute); err != nil {
 		return "", rollback(err)
 	}
 
 	finalImage := fmt.Sprintf("%s:%s", spec.Image, imageTag)
-	b.Logger.Printf("[UpgradeInstance] Upgraded %s to %s", workspaceID, finalImage)
+	b.Logger.Printf("[UpgradeInstance] Upgraded %s to %s", instanceID, finalImage)
 	return fmt.Sprintf("upgrade completed: %s", finalImage), nil
 }
 
-// RollbackWorkspace rolls the Helm release back to a previous revision.
+// RollbackInstance rolls the Helm release back to a previous revision.
 // version=0 means the immediately previous release (Helm default).
 // Helm waits for the rollback to complete before returning.
-func (b *Bridge) RollbackInstance(ctx context.Context, workspaceID string, version int) error {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) RollbackInstance(ctx context.Context, instanceID string, version int) error {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
@@ -175,16 +175,16 @@ func (b *Bridge) RollbackInstance(ctx context.Context, workspaceID string, versi
 	if err := rollback.Run(rel.Name); err != nil {
 		return fmt.Errorf("helm rollback: %w", err)
 	}
-	b.Logger.Printf("[RollbackInstance] Rolled back %s to version %d", workspaceID, version)
-	return b.waitForInstanceHealth(ctx, workspaceID, 2*time.Minute)
+	b.Logger.Printf("[RollbackInstance] Rolled back %s to version %d", instanceID, version)
+	return b.waitForInstanceHealth(ctx, instanceID, 2*time.Minute)
 }
 
 // RepairInstance performs bounded auto-recovery based on the current pod state.
 // Returns the action taken ("restart", "redeploy", or "none") and any error.
 // Unrecoverable conditions (image pull, unschedulable, node pressure eviction)
 // are returned as errors — retrying these would loop indefinitely.
-func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string, error) {
-	status, err := b.GetInstanceStatus(ctx, workspaceID)
+func (b *Bridge) RepairInstance(ctx context.Context, instanceID string) (string, error) {
+	status, err := b.GetInstanceStatus(ctx, instanceID)
 	if err != nil {
 		return "", err
 	}
@@ -201,15 +201,15 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 	// Eviction happens under node memory/disk pressure — must redeploy so
 	// Kubernetes can schedule the pod on a healthy node.
 	if strings.EqualFold(status.PodPhase, string(corev1.PodFailed)) {
-		if podEvicted, msg := b.isPodEvicted(ctx, workspaceID); podEvicted {
-			b.Logger.Printf("[RepairInstance] pod evicted for %s (%s), redeploying", workspaceID, msg)
-			if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+		if podEvicted, msg := b.isPodEvicted(ctx, instanceID); podEvicted {
+			b.Logger.Printf("[RepairInstance] pod evicted for %s (%s), redeploying", instanceID, msg)
+			if err := b.RedeployInstance(ctx, instanceID); err != nil {
 				return "redeploy", err
 			}
 			return "redeploy", nil
 		}
 		// Other Failed phase (e.g. ContainerCannotRun at pod level) → redeploy.
-		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+		if err := b.RedeployInstance(ctx, instanceID); err != nil {
 			return "redeploy", err
 		}
 		return "redeploy", nil
@@ -217,8 +217,8 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 
 	// --- Pod exited cleanly: Succeeded means the agent process stopped, restart it ---
 	if strings.EqualFold(status.PodPhase, string(corev1.PodSucceeded)) {
-		b.Logger.Printf("[RepairInstance] pod phase Succeeded for %s (agent exited cleanly), restarting", workspaceID)
-		if err := b.RestartInstance(ctx, workspaceID); err != nil {
+		b.Logger.Printf("[RepairInstance] pod phase Succeeded for %s (agent exited cleanly), restarting", instanceID)
+		if err := b.RestartInstance(ctx, instanceID); err != nil {
 			return "restart", err
 		}
 		return "restart", nil
@@ -226,8 +226,8 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 
 	// --- Unknown phase: node lost contact, redeploy to reschedule ---
 	if strings.EqualFold(status.PodPhase, string(corev1.PodUnknown)) {
-		b.Logger.Printf("[RepairInstance] pod phase Unknown for %s (node may be unreachable), redeploying", workspaceID)
-		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+		b.Logger.Printf("[RepairInstance] pod phase Unknown for %s (node may be unreachable), redeploying", instanceID)
+		if err := b.RedeployInstance(ctx, instanceID); err != nil {
 			return "redeploy", err
 		}
 		return "redeploy", nil
@@ -236,7 +236,7 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 	// --- Container waiting reasons ---
 	switch status.WaitingReason {
 	case "CrashLoopBackOff", "RunContainerError", "PostStartHookError":
-		if err := b.RestartInstance(ctx, workspaceID); err != nil {
+		if err := b.RestartInstance(ctx, instanceID); err != nil {
 			return "restart", err
 		}
 		return "restart", nil
@@ -244,7 +244,7 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 	case "CreateContainerConfigError", "CreateContainerError", "ContainerCannotRun":
 		// Config or runtime setup is broken — re-running Helm may fix a bad
 		// secret reference or an incorrect pod spec field.
-		if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+		if err := b.RedeployInstance(ctx, instanceID); err != nil {
 			return "redeploy", err
 		}
 		return "redeploy", nil
@@ -252,7 +252,7 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 	case "OOMKilled":
 		// Container was OOM-killed in its last run; it may be in backoff now.
 		// A restart gives it a fresh memory slate.
-		if err := b.RestartInstance(ctx, workspaceID); err != nil {
+		if err := b.RestartInstance(ctx, instanceID); err != nil {
 			return "restart", err
 		}
 		return "restart", nil
@@ -267,8 +267,8 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 		default:
 			// Init container is crashing or misconfigured — redeploy to reapply
 			// the chart which may correct a misconfigured init container spec.
-			b.Logger.Printf("[RepairInstance] init container stuck (%s) for %s, redeploying", initReason, workspaceID)
-			if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+			b.Logger.Printf("[RepairInstance] init container stuck (%s) for %s, redeploying", initReason, instanceID)
+			if err := b.RedeployInstance(ctx, instanceID); err != nil {
 				return "redeploy", err
 			}
 			return "redeploy", nil
@@ -276,21 +276,21 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 	}
 
 	// --- Terminated container: check the current terminated reason directly ---
-	if terminatedReason := b.containerTerminatedReason(ctx, workspaceID); terminatedReason != "" {
+	if terminatedReason := b.containerTerminatedReason(ctx, instanceID); terminatedReason != "" {
 		switch terminatedReason {
 		case "OOMKilled":
-			if err := b.RestartInstance(ctx, workspaceID); err != nil {
+			if err := b.RestartInstance(ctx, instanceID); err != nil {
 				return "restart", err
 			}
 			return "restart", nil
 		case "ContainerCannotRun":
-			if err := b.RedeployInstance(ctx, workspaceID); err != nil {
+			if err := b.RedeployInstance(ctx, instanceID); err != nil {
 				return "redeploy", err
 			}
 			return "redeploy", nil
 		default:
 			// "Error", "Completed", or anything else — container exited unexpectedly.
-			if err := b.RestartInstance(ctx, workspaceID); err != nil {
+			if err := b.RestartInstance(ctx, instanceID); err != nil {
 				return "restart", err
 			}
 			return "restart", nil
@@ -299,7 +299,7 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 
 	// --- Fallback: unhealthy but no specific condition detected → try restart ---
 	if !status.Healthy {
-		if err := b.RestartInstance(ctx, workspaceID); err != nil {
+		if err := b.RestartInstance(ctx, instanceID); err != nil {
 			return "restart", err
 		}
 		return "restart", nil
@@ -310,8 +310,8 @@ func (b *Bridge) RepairInstance(ctx context.Context, workspaceID string) (string
 
 // isPodEvicted checks whether the pod for the given workspace was evicted by the
 // kubelet (e.g. due to node disk/memory pressure). Returns the eviction message.
-func (b *Bridge) isPodEvicted(ctx context.Context, workspaceID string) (bool, string) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) isPodEvicted(ctx context.Context, instanceID string) (bool, string) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return false, ""
 	}
@@ -331,8 +331,8 @@ func (b *Bridge) isPodEvicted(ctx context.Context, workspaceID string) (bool, st
 // containerTerminatedReason returns the Terminated.Reason of the first container
 // that is currently in the Terminated state (not last termination). Returns ""
 // when no container is terminated right now.
-func (b *Bridge) containerTerminatedReason(ctx context.Context, workspaceID string) string {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) containerTerminatedReason(ctx context.Context, instanceID string) string {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return ""
 	}
@@ -355,8 +355,8 @@ func (b *Bridge) containerTerminatedReason(ctx context.Context, workspaceID stri
 
 // GetInstanceEvents returns the 50 most recent Kubernetes events for resources
 // belonging to this workspace release (deployment, pods, PVCs, service).
-func (b *Bridge) GetInstanceEvents(ctx context.Context, workspaceID string) ([]InstanceEvent, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) GetInstanceEvents(ctx context.Context, instanceID string) ([]InstanceEvent, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -422,8 +422,8 @@ func (b *Bridge) GetInstanceEvents(ctx context.Context, workspaceID string) ([]I
 
 // RecreateTerminalSession finds the best running pod for a terminal session.
 // Returns metadata the backend uses to proxy exec — not a browser-usable URL.
-func (b *Bridge) RecreateTerminalSession(ctx context.Context, workspaceID string) (*TerminalSession, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) RecreateTerminalSession(ctx context.Context, instanceID string) (*TerminalSession, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +438,7 @@ func (b *Bridge) RecreateTerminalSession(ctx context.Context, workspaceID string
 
 	pod := selectPod(pods.Items)
 	if pod == nil {
-		return nil, fmt.Errorf("no running pods found for instance %s", workspaceID)
+		return nil, fmt.Errorf("no running pods found for instance %s", instanceID)
 	}
 	if pod.Status.Phase != corev1.PodRunning {
 		return nil, fmt.Errorf("pod %s is not running (phase: %s) — instance may still be starting", pod.Name, pod.Status.Phase)
@@ -450,17 +450,17 @@ func (b *Bridge) RecreateTerminalSession(ctx context.Context, workspaceID string
 		break
 	}
 
-	tok, err := b.issueExecToken(workspaceID)
+	tok, err := b.issueExecToken(instanceID)
 	if err != nil {
 		return nil, fmt.Errorf("issue exec token: %w", err)
 	}
 
 	return &TerminalSession{
-		InstanceID:   workspaceID,
+		InstanceID:   instanceID,
 		Namespace:     ns,
 		PodName:       pod.Name,
 		ContainerName: containerName,
-		ExecURL:       fmt.Sprintf("/v1/instances/%s/exec", workspaceID),
+		ExecURL:       fmt.Sprintf("/v1/instances/%s/exec", instanceID),
 		Token:         tok,
 	}, nil
 }
@@ -523,16 +523,16 @@ func (b *Bridge) waitForDeploymentReady(ctx context.Context, ns, releaseName str
 	}
 }
 
-// waitForWorkspaceHealth polls the internal health probe until it returns 2xx or the context deadline passes.
-func (b *Bridge) waitForInstanceHealth(ctx context.Context, workspaceID string, timeout time.Duration) error {
+// waitForInstanceHealth polls the internal health probe until it returns 2xx or the context deadline passes.
+func (b *Bridge) waitForInstanceHealth(ctx context.Context, instanceID string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	rel, err := b.lookupRelease(ctx, workspaceID)
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec for health wait: %w", err)
 	}
@@ -548,7 +548,7 @@ func (b *Bridge) waitForInstanceHealth(ctx context.Context, workspaceID string, 
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("instance %s did not become healthy within %s", workspaceID, timeout)
+			return fmt.Errorf("instance %s did not become healthy within %s", instanceID, timeout)
 		case <-ticker.C:
 			if healthy, _, _ := b.checkInstanceHealth(ctx, spec); healthy {
 				return nil

@@ -13,7 +13,7 @@ import (
 
 // DiagnosticsResponse is the payload for GET /v1/instances/{id}/diagnostics.
 type DiagnosticsResponse struct {
-	WorkspaceID    string         `json:"workspaceId"`
+	InstanceID    string         `json:"instanceId"`
 	Namespace      string         `json:"namespace"`
 	ReleaseName    string         `json:"releaseName"`
 	Status         InstanceStatus `json:"status"`
@@ -43,7 +43,7 @@ type LogsSummary struct {
 
 // LogsResponse is the payload for GET /v1/instances/{id}/logs.
 type LogsResponse struct {
-	WorkspaceID string `json:"workspaceId"`
+	InstanceID string `json:"instanceId"`
 	PodName     string `json:"podName"`
 	Container   string `json:"container"`
 	Tail        int64  `json:"tail"`
@@ -51,8 +51,8 @@ type LogsResponse struct {
 	Logs        string `json:"logs"`
 }
 
-func (b *Bridge) GetInstanceDiagnostics(ctx context.Context, workspaceID string) (DiagnosticsResponse, error) {
-	status, err := b.GetInstanceStatus(ctx, workspaceID)
+func (b *Bridge) GetInstanceDiagnostics(ctx context.Context, instanceID string) (DiagnosticsResponse, error) {
+	status, err := b.GetInstanceStatus(ctx, instanceID)
 	if err != nil {
 		return DiagnosticsResponse{}, err
 	}
@@ -60,7 +60,7 @@ func (b *Bridge) GetInstanceDiagnostics(ctx context.Context, workspaceID string)
 	releaseName := status.ReleaseName
 
 	out := DiagnosticsResponse{
-		WorkspaceID: workspaceID,
+		InstanceID: instanceID,
 		Namespace:   ns,
 		ReleaseName: releaseName,
 		Status:      status,
@@ -125,7 +125,7 @@ func (b *Bridge) GetInstanceDiagnostics(ctx context.Context, workspaceID string)
 	}
 
 	// Events
-	events, _ := b.GetInstanceEvents(ctx, workspaceID)
+	events, _ := b.GetInstanceEvents(ctx, instanceID)
 	if events == nil {
 		events = []InstanceEvent{}
 	}
@@ -139,8 +139,8 @@ func (b *Bridge) GetInstanceDiagnostics(ctx context.Context, workspaceID string)
 }
 
 // GetInstanceLogs fetches pod logs for the given workspace.
-func (b *Bridge) GetInstanceLogs(ctx context.Context, workspaceID, container string, tail int64, previous bool) (LogsResponse, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) GetInstanceLogs(ctx context.Context, instanceID, container string, tail int64, previous bool) (LogsResponse, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return LogsResponse{}, err
 	}
@@ -153,7 +153,7 @@ func (b *Bridge) GetInstanceLogs(ctx context.Context, workspaceID, container str
 		return LogsResponse{}, fmt.Errorf("list pods: %w", err)
 	}
 	if len(pods.Items) == 0 {
-		return LogsResponse{}, fmt.Errorf("no pods found for instance %s", workspaceID)
+		return LogsResponse{}, fmt.Errorf("no pods found for instance %s", instanceID)
 	}
 
 	pod := selectPod(pods.Items)
@@ -166,7 +166,7 @@ func (b *Bridge) GetInstanceLogs(ctx context.Context, workspaceID, container str
 
 	logs := b.fetchPodLogs(ctx, ns, pod.Name, container, tail, previous)
 	return LogsResponse{
-		WorkspaceID: workspaceID,
+		InstanceID: instanceID,
 		PodName:     pod.Name,
 		Container:   container,
 		Tail:        tail,

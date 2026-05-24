@@ -86,21 +86,21 @@ func applyGatewayAllowAll(envMap map[string]string) {
 // EnableIntegration stores platform tokens in the workspace k8s Secret and
 // updates the workspace's env vars so the gateway picks them up on next start.
 // cfg is a flat map of secret-key→value and env-key→value pairs for the platform.
-func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform string, cfg map[string]string) error {
+func (b *Bridge) EnableIntegration(ctx context.Context, instanceID, platform string, cfg map[string]string) error {
 	if _, ok := platformSecretKeys[platform]; !ok {
 		return fmt.Errorf("unsupported platform %q", platform)
 	}
-	rel, err := b.lookupRelease(ctx, workspaceID)
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
 	ns := rel.Namespace
 	releaseName := rel.Name
-	secretName := b.workspaceSecretName(workspaceID)
+	secretName := b.instanceSecretName(instanceID)
 
 	// Patch k8s Secret with token keys.
 	if len(platformSecretKeys[platform]) > 0 {
-		secret, err := b.getOrCreateWorkspaceSecret(ctx, ns, secretName)
+		secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName)
 		if err != nil {
 			return err
 		}
@@ -117,8 +117,8 @@ func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform st
 		}
 	}
 
-	// Reconstruct spec; workspaceSpecFromRelease restores spec.Secrets via secretKeysFromRelease.
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	// Reconstruct spec; instanceSpecFromRelease restores spec.Secrets via secretKeysFromRelease.
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, ns, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -139,7 +139,7 @@ func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform st
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[EnableIntegration] Enabled %s for instance %s", platform, workspaceID)
+	b.Logger.Printf("[EnableIntegration] Enabled %s for instance %s", platform, instanceID)
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute); err != nil {
 		return err
 	}
@@ -147,28 +147,28 @@ func (b *Bridge) EnableIntegration(ctx context.Context, workspaceID, platform st
 	// Apply platform-specific config.yaml defaults after the pod is ready.
 	// deepMergeNoOverwrite preserves any settings the user has already customised.
 	if defaults := platformConfigDefaults(platform); defaults != nil {
-		if err := b.mergeInstanceConfigYAML(ctx, workspaceID, defaults); err != nil {
-			b.Logger.Printf("[EnableIntegration] config.yaml defaults for %s on %s: %v (non-fatal)", platform, workspaceID, err)
+		if err := b.mergeInstanceConfigYAML(ctx, instanceID, defaults); err != nil {
+			b.Logger.Printf("[EnableIntegration] config.yaml defaults for %s on %s: %v (non-fatal)", platform, instanceID, err)
 		}
 	}
 
-	b.EnsureGatewayRunning(ctx, workspaceID)
+	b.EnsureGatewayRunning(ctx, instanceID)
 	return nil
 }
 
 // DisableIntegration removes platform tokens from the workspace k8s Secret and
 // clears all platform env vars from the workspace's extraEnv.
-func (b *Bridge) DisableIntegration(ctx context.Context, workspaceID, platform string) error {
+func (b *Bridge) DisableIntegration(ctx context.Context, instanceID, platform string) error {
 	if _, ok := platformSecretKeys[platform]; !ok {
 		return fmt.Errorf("unsupported platform %q", platform)
 	}
-	rel, err := b.lookupRelease(ctx, workspaceID)
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
 	ns := rel.Namespace
 	releaseName := rel.Name
-	secretName := b.workspaceSecretName(workspaceID)
+	secretName := b.instanceSecretName(instanceID)
 
 	// Remove platform secret keys from bridge-owned Secret.
 	secret, err := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
@@ -184,8 +184,8 @@ func (b *Bridge) DisableIntegration(ctx context.Context, workspaceID, platform s
 		}
 	}
 
-	// Reconstruct spec; spec.Secrets is restored by workspaceSpecFromRelease.
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	// Reconstruct spec; spec.Secrets is restored by instanceSpecFromRelease.
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, ns, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -203,23 +203,23 @@ func (b *Bridge) DisableIntegration(ctx context.Context, workspaceID, platform s
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[DisableIntegration] Disabled %s for instance %s", platform, workspaceID)
+	b.Logger.Printf("[DisableIntegration] Disabled %s for instance %s", platform, instanceID)
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute); err != nil {
 		return err
 	}
-	b.EnsureGatewayRunning(ctx, workspaceID)
+	b.EnsureGatewayRunning(ctx, instanceID)
 	return nil
 }
 
-// GetWorkspaceIntegrations returns the status of all known messaging platforms
+// GetInstanceIntegrations returns the status of all known messaging platforms
 // for the given workspace. Token values are never returned.
-func (b *Bridge) GetInstanceIntegrations(ctx context.Context, workspaceID string) ([]IntegrationStatus, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) GetInstanceIntegrations(ctx context.Context, instanceID string) ([]IntegrationStatus, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return nil, err
 	}
 	ns := rel.Namespace
-	secretName := b.workspaceSecretName(workspaceID)
+	secretName := b.instanceSecretName(instanceID)
 
 	secret, _ := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 	envMap := envMapFromRelease(rel.Config)
@@ -258,14 +258,14 @@ func (b *Bridge) GetInstanceIntegrations(ctx context.Context, workspaceID string
 // SetIntegrations converges the instance to exactly the set of messaging platforms
 // in desired. Platforms absent from the map are disabled; an empty map disables all.
 // All changes are applied in a single Helm upgrade — not one upgrade per platform.
-func (b *Bridge) SetIntegrations(ctx context.Context, workspaceID string, desired map[string]json.RawMessage) error {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) SetIntegrations(ctx context.Context, instanceID string, desired map[string]json.RawMessage) error {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return err
 	}
 	ns := rel.Namespace
 	releaseName := rel.Name
-	secretName := b.workspaceSecretName(workspaceID)
+	secretName := b.instanceSecretName(instanceID)
 
 	// Build union sets of all known platform keys so we can strip them cleanly.
 	allSecretKeys := map[string]bool{}
@@ -282,7 +282,7 @@ func (b *Bridge) SetIntegrations(ctx context.Context, workspaceID string, desire
 	}
 
 	// Get current secret — create if missing.
-	secret, err := b.getOrCreateWorkspaceSecret(ctx, ns, secretName)
+	secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName)
 	if err != nil {
 		return err
 	}
@@ -327,7 +327,7 @@ func (b *Bridge) SetIntegrations(ctx context.Context, workspaceID string, desire
 	}
 
 	// Reconstruct spec and apply new env + secret key registrations.
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, ns, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, ns, b.ClusterName)
 	if err != nil {
 		return fmt.Errorf("reconstruct spec: %w", err)
 	}
@@ -350,11 +350,11 @@ func (b *Bridge) SetIntegrations(ctx context.Context, workspaceID string, desire
 	if _, err := b.UpdateInstance(ctx, spec); err != nil {
 		return err
 	}
-	b.Logger.Printf("[SetIntegrations] Converged %d platform(s) for instance %s", len(desired), workspaceID)
+	b.Logger.Printf("[SetIntegrations] Converged %d platform(s) for instance %s", len(desired), instanceID)
 	if err := b.waitForDeploymentReady(ctx, ns, releaseName, 3*time.Minute); err != nil {
 		return err
 	}
-	b.EnsureGatewayRunning(ctx, workspaceID)
+	b.EnsureGatewayRunning(ctx, instanceID)
 	return nil
 }
 
@@ -381,18 +381,18 @@ func platformConfigDefaults(platform string) map[string]any {
 // mergeInstanceConfigYAML reads config.yaml from the running pod, deep-merges
 // overlay into it without overwriting existing user-set values, then writes it
 // back. Non-fatal if the pod isn't running yet — caller logs and continues.
-func (b *Bridge) mergeInstanceConfigYAML(ctx context.Context, workspaceID string, overlay map[string]any) error {
+func (b *Bridge) mergeInstanceConfigYAML(ctx context.Context, instanceID string, overlay map[string]any) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	pod, err := b.findExecPod(ctx, workspaceID)
+	pod, err := b.findExecPod(ctx, instanceID)
 	if err != nil {
 		return fmt.Errorf("no running pod: %w", err)
 	}
 	container := pod.Spec.Containers[0].Name
 	configPath := "/home/hermeswebui/.hermes/config.yaml"
 
-	stdout, stderr, err := b.podRunCommand(ctx, workspaceID, pod.Name, container, []string{"cat", configPath})
+	stdout, stderr, err := b.podRunCommand(ctx, instanceID, pod.Name, container, []string{"cat", configPath})
 	if err != nil {
 		return fmt.Errorf("read config.yaml: %w (stderr: %s)", err, strings.TrimSpace(stderr))
 	}
@@ -413,7 +413,7 @@ func (b *Bridge) mergeInstanceConfigYAML(ctx context.Context, workspaceID string
 
 	encoded := base64.StdEncoding.EncodeToString(out)
 	cmd := []string{"sh", "-c", fmt.Sprintf("echo %s | base64 -d > %s", encoded, configPath)}
-	if _, stderr, err := b.podRunCommand(ctx, workspaceID, pod.Name, container, cmd); err != nil {
+	if _, stderr, err := b.podRunCommand(ctx, instanceID, pod.Name, container, cmd); err != nil {
 		return fmt.Errorf("write config.yaml: %w (stderr: %s)", err, strings.TrimSpace(stderr))
 	}
 	return nil

@@ -14,17 +14,17 @@ import (
 	helmrelease "helm.sh/helm/v3/pkg/release"
 )
 
-func (b *Bridge) GetInstanceStatus(ctx context.Context, workspaceID string) (InstanceStatus, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) GetInstanceStatus(ctx context.Context, instanceID string) (InstanceStatus, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return InstanceStatus{}, err
 	}
 	// Release exists but has been soft-deleted (--keep-history). Return a
 	// minimal deleted status so the backend can stop polling and mark it done.
 	if rel.Info != nil && rel.Info.Status == helmrelease.StatusUninstalled {
-		spec, _ := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+		spec, _ := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 		return InstanceStatus{
-			InstanceID: workspaceID,
+			InstanceID: instanceID,
 			ClusterID:   b.ClusterName,
 			ReleaseName: rel.Name,
 			Namespace:   rel.Namespace,
@@ -34,7 +34,7 @@ func (b *Bridge) GetInstanceStatus(ctx context.Context, workspaceID string) (Ins
 			Spec:        spec,
 		}, nil
 	}
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
 		return InstanceStatus{}, err
 	}
@@ -43,7 +43,7 @@ func (b *Bridge) GetInstanceStatus(ctx context.Context, workspaceID string) (Ins
 
 func (b *Bridge) collectInstanceStatus(ctx context.Context, spec InstanceSpec, releaseName string, createdAt time.Time) (InstanceStatus, error) {
 	selector := labels.Set{"app.kubernetes.io/instance": releaseName}.AsSelector().String()
-	namespace := b.workspaceNamespace(spec)
+	namespace := b.instanceNamespace(spec)
 
 	deployments, err := b.KubeClient.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
@@ -144,7 +144,7 @@ func (b *Bridge) checkInstanceHealth(ctx context.Context, spec InstanceSpec) (bo
 	// Traefik ForwardAuth — the pod is healthy even before the auth endpoint exists.
 	url := b.instanceInternalHealthURL(spec, b.Config.HealthPath)
 	if url == "" {
-		return false, 0, fmt.Errorf("workspace URL is not configured")
+		return false, 0, fmt.Errorf("instance URL is not configured")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

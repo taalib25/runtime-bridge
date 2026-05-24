@@ -43,15 +43,15 @@ func (b *Bridge) handleGetClusterResources(w http.ResponseWriter, r *http.Reques
 
 // handleGetInstanceDiagnostics GET /v1/instances/{id}/diagnostics
 func (b *Bridge) handleGetInstanceDiagnostics(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	ctx, cancel := adminContextTimeout(r.Context())
 	defer cancel()
 
-	diag, err := b.GetInstanceDiagnostics(ctx, workspaceID)
+	diag, err := b.GetInstanceDiagnostics(ctx, instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -65,8 +65,8 @@ func (b *Bridge) handleGetInstanceDiagnostics(w http.ResponseWriter, r *http.Req
 
 // handleGetInstanceLogs GET /v1/instances/{id}/logs?tail=200&previous=false&container=
 func (b *Bridge) handleGetInstanceLogs(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
@@ -83,7 +83,7 @@ func (b *Bridge) handleGetInstanceLogs(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := adminContextTimeout(r.Context())
 	defer cancel()
 
-	resp, err := b.GetInstanceLogs(ctx, workspaceID, container, tail, previous)
+	resp, err := b.GetInstanceLogs(ctx, instanceID, container, tail, previous)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)
@@ -97,15 +97,15 @@ func (b *Bridge) handleGetInstanceLogs(w http.ResponseWriter, r *http.Request) {
 
 // handleGetInstanceResources GET /v1/instances/{id}/resources
 func (b *Bridge) handleGetInstanceResources(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format"))
 		return
 	}
 	ctx, cancel := adminContextTimeout(r.Context())
 	defer cancel()
 
-	res, err := b.GetInstanceResources(ctx, workspaceID)
+	res, err := b.GetInstanceResources(ctx, instanceID)
 	if err != nil {
 		if isInstanceNotFound(err) {
 			writeError(w, http.StatusNotFound, err)

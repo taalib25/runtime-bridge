@@ -33,7 +33,7 @@ type Config struct {
 	// e.g. "https://app.hermeshq.net,http://localhost:3002"
 	// Env: BRIDGE_CORS_ORIGINS
 	DefaultCORSOrigins string `json:"defaultCORSOrigins" yaml:"defaultCORSOrigins"`
-	// DefaultDomain is appended to workspaceID to form the ingress host when network.host is unset.
+	// DefaultDomain is appended to instanceID to form the ingress host when network.host is unset.
 	// e.g. "hermeshq.net" → "tenant-abc.hermeshq.net"
 	// Env: BRIDGE_DEFAULT_DOMAIN
 	DefaultDomain string `json:"defaultDomain" yaml:"defaultDomain"`

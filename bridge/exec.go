@@ -48,8 +48,8 @@ type execMsg struct {
 //   - Server → client: binary frames carrying raw PTY output
 //   - Client → server: JSON text frames (execMsg)
 func (b *Bridge) handleExec(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId"))
 		return
 	}
@@ -60,7 +60,7 @@ func (b *Bridge) handleExec(w http.ResponseWriter, r *http.Request) {
 		cmd = "/bin/sh"
 	}
 
-	pod, err := b.findExecPod(r.Context(), workspaceID)
+	pod, err := b.findExecPod(r.Context(), instanceID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("no running pod: %w", err))
 		return
@@ -71,16 +71,16 @@ func (b *Bridge) handleExec(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		b.Logger.Printf("[exec] WebSocket upgrade failed for %s: %v", workspaceID, err)
+		b.Logger.Printf("[exec] WebSocket upgrade failed for %s: %v", instanceID, err)
 		return
 	}
 	defer conn.Close()
 
-	b.Logger.Printf("[exec] open  ws=%s pod=%s container=%s cmd=%s", workspaceID, pod.Name, container, cmd)
+	b.Logger.Printf("[exec] open  ws=%s pod=%s container=%s cmd=%s", instanceID, pod.Name, container, cmd)
 
-	execErr := b.streamExec(r.Context(), conn, pod.Name, workspaceID, container, cmd)
+	execErr := b.streamExec(r.Context(), conn, pod.Name, instanceID, container, cmd)
 
-	b.Logger.Printf("[exec] close ws=%s: %v", workspaceID, execErr)
+	b.Logger.Printf("[exec] close ws=%s: %v", instanceID, execErr)
 }
 
 // findExecPod returns the first Running pod in the workspace namespace.
@@ -251,36 +251,36 @@ func (b *Bridge) podRunCommand(ctx context.Context, ns, podName, container strin
 // pod and starts it if not. Called after every integration config change.
 // A start failure is logged but not returned — the integration config is already
 // applied and the pod owns gateway lifecycle from this point.
-func (b *Bridge) EnsureGatewayRunning(ctx context.Context, workspaceID string) {
+func (b *Bridge) EnsureGatewayRunning(ctx context.Context, instanceID string) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	pod, err := b.findExecPod(ctx, workspaceID)
+	pod, err := b.findExecPod(ctx, instanceID)
 	if err != nil {
-		b.Logger.Printf("[EnsureGatewayRunning] no running pod for %s: %v", workspaceID, err)
+		b.Logger.Printf("[EnsureGatewayRunning] no running pod for %s: %v", instanceID, err)
 		return
 	}
 	container := pod.Spec.Containers[0].Name
 
-	stdout, _, _ := b.podRunCommand(ctx, workspaceID, pod.Name, container, []string{"hermes", "gateway", "status"})
+	stdout, _, _ := b.podRunCommand(ctx, instanceID, pod.Name, container, []string{"hermes", "gateway", "status"})
 	if gatewayRunningFromOutput(stdout) {
 		return // already running
 	}
 
-	b.Logger.Printf("[EnsureGatewayRunning] gateway not running in %s, starting...", workspaceID)
-	_, stderr, startErr := b.podRunCommand(ctx, workspaceID, pod.Name, container,
+	b.Logger.Printf("[EnsureGatewayRunning] gateway not running in %s, starting...", instanceID)
+	_, stderr, startErr := b.podRunCommand(ctx, instanceID, pod.Name, container,
 		[]string{"hermes", "gateway", "start"})
 	if startErr != nil {
 		b.Logger.Printf("[EnsureGatewayRunning] gateway start failed for %s: %v (stderr: %s)",
-			workspaceID, startErr, strings.TrimSpace(stderr))
+			instanceID, startErr, strings.TrimSpace(stderr))
 	}
 }
 
 // handleGatewayStatus GET /v1/instances/{id}/gateway/status
 // Runs `hermes gateway status` in the instance pod and returns whether it's running.
 func (b *Bridge) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
-	workspaceID := mux.Vars(r)["id"]
-	if !validInstanceID(workspaceID) {
+	instanceID := mux.Vars(r)["id"]
+	if !validInstanceID(instanceID) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId"))
 		return
 	}
@@ -288,14 +288,14 @@ func (b *Bridge) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	pod, err := b.findExecPod(ctx, workspaceID)
+	pod, err := b.findExecPod(ctx, instanceID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("no running pod: %w", err))
 		return
 	}
 	container := pod.Spec.Containers[0].Name
 
-	stdout, stderr, _ := b.podRunCommand(ctx, workspaceID, pod.Name, container,
+	stdout, stderr, _ := b.podRunCommand(ctx, instanceID, pod.Name, container,
 		[]string{"hermes", "gateway", "status"})
 
 	// hermes gateway status exits 0 regardless of state — parse output text.
@@ -305,7 +305,7 @@ func (b *Bridge) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 		output = strings.TrimSpace(stderr)
 	}
 	writeJSON(w, http.StatusOK, GatewayStatus{
-		InstanceID: workspaceID,
+		InstanceID: instanceID,
 		Running:    running,
 		Output:     output,
 	})

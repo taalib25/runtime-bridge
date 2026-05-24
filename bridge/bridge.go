@@ -54,7 +54,7 @@ type Bridge struct {
 }
 
 type execToken struct {
-	workspaceID string
+	instanceID string
 	expiry      time.Time
 }
 
@@ -262,27 +262,27 @@ func (b *Bridge) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// issueExecToken mints a single-use 32-byte random token tied to workspaceID.
+// issueExecToken mints a single-use 32-byte random token tied to instanceID.
 // The token expires after 2 minutes — enough for a browser to open the WebSocket.
-func (b *Bridge) issueExecToken(workspaceID string) (string, error) {
+func (b *Bridge) issueExecToken(instanceID string) (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("generate exec token: %w", err)
 	}
 	tok := hex.EncodeToString(buf)
-	b.execTokens.Store(tok, execToken{workspaceID: workspaceID, expiry: time.Now().Add(2 * time.Minute)})
+	b.execTokens.Store(tok, execToken{instanceID: instanceID, expiry: time.Now().Add(2 * time.Minute)})
 	return tok, nil
 }
 
 // consumeExecToken validates and atomically deletes a token.
-// Returns true only if the token exists, hasn't expired, and matches workspaceID.
-func (b *Bridge) consumeExecToken(tok, workspaceID string) bool {
+// Returns true only if the token exists, hasn't expired, and matches instanceID.
+func (b *Bridge) consumeExecToken(tok, instanceID string) bool {
 	v, ok := b.execTokens.LoadAndDelete(tok)
 	if !ok {
 		return false
 	}
 	et := v.(execToken)
-	return et.workspaceID == workspaceID && time.Now().Before(et.expiry)
+	return et.instanceID == instanceID && time.Now().Before(et.expiry)
 }
 
 func (b *Bridge) trackOperation(operation, result string, started time.Time) {
@@ -383,14 +383,14 @@ func (b *Bridge) startOperationCleanup(ctx context.Context) {
 	}
 }
 
-func (b *Bridge) releaseName(workspaceID string) string {
+func (b *Bridge) releaseName(instanceID string) string {
 	if strings.TrimSpace(b.Config.ReleasePrefix) == "" {
-		return workspaceID
+		return instanceID
 	}
-	return b.Config.ReleasePrefix + workspaceID
+	return b.Config.ReleasePrefix + instanceID
 }
 
-func (b *Bridge) workspaceNamespace(spec InstanceSpec) string {
+func (b *Bridge) instanceNamespace(spec InstanceSpec) string {
 	if strings.TrimSpace(spec.Namespace) != "" {
 		return spec.Namespace
 	}
@@ -460,16 +460,16 @@ func (b *Bridge) checkClusterCapacity(ctx context.Context) error {
 	return nil
 }
 
-func (b *Bridge) getInstance(ctx context.Context, workspaceID string) (*Instance, error) {
-	rel, err := b.lookupRelease(ctx, workspaceID)
+func (b *Bridge) getInstance(ctx context.Context, instanceID string) (*Instance, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
 	if err != nil {
 		return nil, err
 	}
-	spec, err := workspaceSpecFromRelease(workspaceID, rel.Config, rel.Namespace, b.ClusterName)
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 	if err != nil {
 		return nil, err
 	}
-	status, err := b.GetInstanceStatus(ctx, workspaceID)
+	status, err := b.GetInstanceStatus(ctx, instanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -477,12 +477,12 @@ func (b *Bridge) getInstance(ctx context.Context, workspaceID string) (*Instance
 	return &Instance{Spec: spec, Status: status}, nil
 }
 
-func (b *Bridge) lookupRelease(_ context.Context, workspaceID string) (*release.Release, error) {
-	releaseName := b.releaseName(workspaceID)
+func (b *Bridge) lookupRelease(_ context.Context, instanceID string) (*release.Release, error) {
+	releaseName := b.releaseName(instanceID)
 	// Workspace releases live in their own namespace — use a per-workspace config.
-	helmCfg, err := newHelmActionConfigForNamespace(b.Config, workspaceID)
+	helmCfg, err := newHelmActionConfigForNamespace(b.Config, instanceID)
 	if err != nil {
-		return nil, fmt.Errorf("helm config for workspace %s: %w", workspaceID, err)
+		return nil, fmt.Errorf("helm config for workspace %s: %w", instanceID, err)
 	}
 	lister := action.NewList(helmCfg)
 	lister.All = true
@@ -496,7 +496,7 @@ func (b *Bridge) lookupRelease(_ context.Context, workspaceID string) (*release.
 			return rel, nil
 		}
 	}
-	return nil, errInstanceNotFound(workspaceID)
+	return nil, errInstanceNotFound(instanceID)
 }
 
 func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
@@ -513,8 +513,8 @@ func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
 	return err
 }
 
-func errInstanceNotFound(workspaceID string) error {
-	return fmt.Errorf("instance %q not found", workspaceID)
+func errInstanceNotFound(instanceID string) error {
+	return fmt.Errorf("instance %q not found", instanceID)
 }
 
 func isInstanceNotFound(err error) bool {

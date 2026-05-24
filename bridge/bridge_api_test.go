@@ -91,12 +91,12 @@ func TestEnvMapFromRelease_Missing(t *testing.T) {
 
 func TestInstanceSecretName(t *testing.T) {
 	b := newTestBridge("s")
-	got := b.workspaceSecretName("ws-1234567890abcdef")
+	got := b.instanceSecretName("ws-1234567890abcdef")
 	if !strings.HasSuffix(got, "-secrets") {
 		t.Errorf("expected -secrets suffix, got %q", got)
 	}
 	if !strings.Contains(got, "ws-1234567890abcdef") {
-		t.Errorf("expected workspaceID in secret name, got %q", got)
+		t.Errorf("expected instanceID in secret name, got %q", got)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestBuildValues_SecretsExistingSecret(t *testing.T) {
 	}
 	existingSecret, _ := secrets["existingSecret"].(string)
 	if !strings.Contains(existingSecret, "ws-aabbccddeeff0011") {
-		t.Errorf("existingSecret should reference the workspaceID, got %q", existingSecret)
+		t.Errorf("existingSecret should reference the instanceID, got %q", existingSecret)
 	}
 	if secrets["create"] != false {
 		t.Errorf("secrets.create should be false")
