@@ -93,16 +93,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       procps \
       lsof \
       sudo \
-      uidmap
+      uidmap \
+      adduser
 
 RUN npm install -g pnpm yarn --no-audit --no-fund && npm cache clean --force
 
 # Users own their pod — full sudo mirrors a VPS experience within the container boundary.
 # uidmap provides user namespace support (unshare --user) as an additional tool.
 # Pod security context requires allowPrivilegeEscalation: true + CAP_SETUID/SETGID for sudo.
-RUN groupadd --gid 1024 hermeswebui \
-    && useradd --uid 1024 --gid 1024 --no-user-group \
-               --create-home --home-dir /home/hermeswebui hermeswebui \
+RUN addgroup --gid 1024 hermeswebui \
+    && adduser --uid 1024 --gid 1024 --disabled-password --gecos '' \
+               --home /home/hermeswebui hermeswebui \
     && mkdir -p /opt/hermes-agent /opt/hermes-webui /workspace /home/hermeswebui/.hermes \
     && chown -R 1024:1024 /opt/hermes-agent /opt/hermes-webui /workspace /home/hermeswebui \
     && echo 'hermeswebui ALL=(root) NOPASSWD: ALL' > /etc/sudoers.d/hermeswebui \
