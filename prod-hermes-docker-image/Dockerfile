@@ -22,7 +22,7 @@ RUN set -eux; \
 FROM python:3.12-slim AS runtime
 
 ARG HERMES_WEBUI_REPO=https://github.com/nesquena/hermes-webui.git
-ARG HERMES_WEBUI_REF=main
+ARG HERMES_WEBUI_REF=master
 ARG BUILD_DATE=unknown
 ARG VCS_REF=unknown
 

@@ -39,7 +39,7 @@ jobs:
           push: true
           build-args: |
             HERMES_AGENT_IMAGE=nousresearch/hermes-agent:latest
-            HERMES_WEBUI_REF=main
+            HERMES_WEBUI_REF=master
             BUILD_DATE=${{ env.BUILD_DATE }}
             VCS_REF=${{ github.sha }}
           tags: |
