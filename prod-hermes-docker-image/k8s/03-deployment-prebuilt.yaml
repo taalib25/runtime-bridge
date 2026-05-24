@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermescloud-runtime-test
+  namespace: hermes-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermescloud-runtime-test
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: hermescloud-runtime-test
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1024
+        fsGroupChangePolicy: OnRootMismatch
+      # For private GHCR images, create ghcr-pull-secret and uncomment:
+      # imagePullSecrets:
+      #   - name: ghcr-pull-secret
+      containers:
+        - name: hermes-runtime
+          image: ghcr.io/taalib25/runtime-node-core:0.1.0
+          imagePullPolicy: Always
+          ports:
+            - name: webui
+              containerPort: 8787
+          env:
+            - name: INSTANCE_ID
+              value: "hermescloud-runtime-test"
+            - name: HERMES_WEBUI_HOST
+              value: "0.0.0.0"
+            - name: HERMES_WEBUI_PORT
+              value: "8787"
+            - name: HERMES_WEBUI_AGENT_DIR
+              value: "/home/hermeswebui/.hermes/hermes-agent"
+            - name: HERMES_WEBUI_STATE_DIR
+              value: "/home/hermeswebui/.hermes/webui"
+            - name: HERMES_WEBUI_DEFAULT_WORKSPACE
+              value: "/workspace"
+            - name: HERMES_HOME
+              value: "/home/hermeswebui/.hermes"
+            - name: HERMES_SKIP_SETUP
+              value: "1"
+            - name: HERMES_EXEC_ASK
+              value: "false"
+            - name: HERMES_TIMEZONE
+              value: "UTC"
+            - name: HERMES_INFERENCE_PROVIDER
+              value: "opencode-go"
+            - name: HERMES_MODEL
+              value: "opencode-go/qwen3.6-plus"
+            - name: HERMES_WEBUI_DEFAULT_MODEL
+              value: "opencode-go/qwen3.6-plus"
+            - name: HERMES_BASE_URL
+              value: "https://opencode.ai/zen/go"
+            - name: OPENCODE_GO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-runtime-secrets
+                  key: OPENCODE_GO_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-runtime-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-runtime-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-runtime-secrets
+                  key: OPENROUTER_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: hermes-state
+              mountPath: /home/hermeswebui/.hermes
+            - name: hermes-workspace
+              mountPath: /workspace
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "3Gi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1024
+            runAsGroup: 1024
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8787
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 18
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8787
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: hermes-state
+          persistentVolumeClaim:
+            claimName: hermes-state-test
+        - name: hermes-workspace
+          persistentVolumeClaim:
+            claimName: hermes-workspace-test

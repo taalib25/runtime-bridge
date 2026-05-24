@@ -422,7 +422,11 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		values["podLabels"] = map[string]any{"hermes.ai/plan": spec.Plan}
 	}
 
-	if policy := strings.TrimSpace(spec.ImagePullPolicy); policy != "" {
+	policy := strings.TrimSpace(spec.ImagePullPolicy)
+	if policy == "" && tag == "latest" {
+		policy = "Always"
+	}
+	if policy != "" {
 		values["image"].(map[string]any)["pullPolicy"] = policy
 	}
 	if sa := strings.TrimSpace(spec.ServiceAccount); sa != "" {
@@ -510,10 +514,11 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"fsGroupChangePolicy": "OnRootMismatch",
 	}
 	values["securityContext"] = map[string]any{
-		"allowPrivilegeEscalation": false,
-		"readOnlyRootFilesystem":   false, // hermes-webui venv writes to /opt/hermes-webui
+		"allowPrivilegeEscalation": true,
+		"readOnlyRootFilesystem":   false,
 		"capabilities": map[string]any{
 			"drop": []any{"ALL"},
+			"add":  []any{"SETUID", "SETGID"},
 		},
 	}
 

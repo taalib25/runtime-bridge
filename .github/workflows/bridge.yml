@@ -60,12 +60,6 @@ jobs:
           docker save hermes-bridge:${{ steps.tag.outputs.sha }} | \
             ssh root@178.104.185.60 "k3s ctr images import -"
 
-      - name: Pre-pull runtime image on node
-        run: |
-          ssh root@178.104.185.60 \
-            "k3s ctr images pull --user taalib25:${{ secrets.GHCR_PAT }} \
-              ghcr.io/taalib25/runtime-node-core:0.1.0"
-
       - name: Apply manifests
         run: |
           sed "s|hermes-bridge:__GIT_SHA__|hermes-bridge:${{ steps.tag.outputs.sha }}|g" \

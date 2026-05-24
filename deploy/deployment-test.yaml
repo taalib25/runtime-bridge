@@ -52,6 +52,8 @@ spec:
               value: "hermeshq.net"
             - name: BRIDGE_HEALTH_PATH
               value: "/health"
+            - name: BRIDGE_RUNTIME_NODE_CORE_TAG
+              value: "latest"
           resources:
             requests:
               cpu: 100m

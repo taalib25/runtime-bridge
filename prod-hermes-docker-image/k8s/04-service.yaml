@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermescloud-runtime-test
+  namespace: hermes-test
+spec:
+  type: ClusterIP
+  selector:
+    app: hermescloud-runtime-test
+  ports:
+    - name: webui
+      port: 8787
+      targetPort: 8787

@@ -60,7 +60,7 @@ func DefaultConfig() Config {
 		ReleasePrefix:           "",
 		CreateNamespace:         false,
 		RuntimeNodeCoreImage:    "ghcr.io/taalib25/runtime-node-core",
-		RuntimeNodeCoreImageTag: "0.1.0",
+		RuntimeNodeCoreImageTag: "latest",
 	}
 }
 

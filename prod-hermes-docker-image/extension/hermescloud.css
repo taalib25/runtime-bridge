@@ -1,0 +1,225 @@
+/* HermesCloud extension — brand skin, font, and UX polish */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+/* ── Brand skin ────────────────────────────────────────────────── */
+:root[data-skin="hermescloud"] {
+  --accent:           #5B7FFF;
+  --accent-hover:     #3D5FE0;
+  --accent-bg:        rgba(91, 127, 255, 0.08);
+  --accent-bg-strong: rgba(91, 127, 255, 0.16);
+  --accent-text:      #3D5FE0;
+}
+
+:root.dark[data-skin="hermescloud"] {
+  --accent:           #7B9FFF;
+  --accent-hover:     #9DB8FF;
+  --accent-bg:        rgba(123, 159, 255, 0.10);
+  --accent-bg-strong: rgba(123, 159, 255, 0.20);
+  --accent-text:      #9DB8FF;
+}
+
+/* ── Font ──────────────────────────────────────────────────────── */
+:root {
+  --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* ── No-provider banner ────────────────────────────────────────── */
+#hc-no-provider-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--accent-bg-strong);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-size-sm);
+  color: var(--text);
+  z-index: 100;
+}
+
+#hc-no-provider-banner a,
+#hc-no-provider-banner button.hc-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+}
+
+/* ── Provider redirect inside settings ─────────────────────────── */
+#hc-provider-redirect {
+  padding: 20px;
+  background: var(--surface-subtle);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  font-size: var(--font-size-sm);
+  color: var(--text);
+  line-height: 1.6;
+  margin-top: 8px;
+}
+
+#hc-provider-redirect code {
+  background: var(--code-bg);
+  color: var(--code-text);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.9em;
+}
+
+/* ── Starter hints ─────────────────────────────────────────────── */
+#hc-starter-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 4px 8px;
+}
+
+.hc-hint-chip {
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.hc-hint-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Sidebar tour popover ──────────────────────────────────────── */
+#hc-tour-popover {
+  position: fixed;
+  z-index: 9999;
+  max-width: 240px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  font-size: var(--font-size-sm);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+#hc-tour-popover strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--strong);
+}
+
+#hc-tour-popover .hc-tour-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+  gap: 8px;
+}
+
+#hc-tour-popover .hc-tour-next {
+  padding: 5px 14px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+#hc-tour-popover .hc-tour-next:hover {
+  background: var(--accent-hover);
+}
+
+#hc-tour-popover .hc-tour-skip {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  padding: 0;
+}
+
+#hc-tour-popover .hc-tour-skip:hover {
+  color: var(--text);
+}
+
+#hc-tour-popover .hc-tour-step {
+  font-size: var(--font-size-xs);
+  color: var(--muted);
+}
+
+#hc-tour-highlight {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9998;
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 4px var(--accent-bg);
+  transition: all 0.2s ease;
+}
+
+/* ── pre-header flex so Run button floats right ────────────────── */
+.pre-header {
+  display: flex;
+  align-items: center;
+}
+
+/* ── Run in terminal button ────────────────────────────────────── */
+.hc-run-btn {
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  font-family: var(--font-ui);
+}
+
+.hc-run-btn:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.hc-run-btn--auth {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 500;
+  animation: hc-pulse 1.8s ease infinite;
+}
+
+.hc-run-btn--auth:hover {
+  background: var(--accent-bg-strong);
+}
+
+@keyframes hc-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-bg); }
+  50%       { box-shadow: 0 0 0 4px var(--accent-bg-strong); }
+}
+
+/* ── Keyboard shortcut hint ────────────────────────────────────── */
+.hc-kb-hint {
+  font-size: var(--font-size-xs);
+  color: var(--muted);
+  opacity: 0.65;
+  pointer-events: none;
+  transition: opacity 0.6s ease;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.hc-kb-hint--fade {
+  opacity: 0;
+}

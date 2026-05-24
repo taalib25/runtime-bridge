@@ -1,0 +1,31 @@
+services:
+  hermescloud-runtime:
+    build:
+      context: .
+      args:
+        HERMES_AGENT_IMAGE: nousresearch/hermes-agent:latest
+        HERMES_WEBUI_REF: main
+    image: hermescloud-runtime:0.1.0
+    container_name: hermescloud-runtime-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    env_file:
+      - .env
+    environment:
+      HERMES_WEBUI_HOST: "0.0.0.0"
+      HERMES_WEBUI_PORT: "8787"
+      HERMES_WEBUI_DEFAULT_WORKSPACE: "/workspace"
+      HERMES_WEBUI_AGENT_DIR: "/opt/hermes-agent"
+      HERMES_HOME: "/home/hermeswebui/.hermes"
+      HERMES_SKIP_SETUP: "1"
+      HERMES_EXEC_ASK: "false"
+      HERMES_TIMEZONE: "UTC"
+    volumes:
+      - hermes-state:/home/hermeswebui/.hermes
+      - hermes-workspace:/workspace
+    init: true
+
+volumes:
+  hermes-state:
+  hermes-workspace:

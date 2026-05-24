@@ -1,0 +1,15 @@
+# Optional only for locked-down test servers. Prefer kubectl port-forward.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermescloud-runtime-test-nodeport
+  namespace: hermes-test
+spec:
+  type: NodePort
+  selector:
+    app: hermescloud-runtime-test
+  ports:
+    - name: webui
+      port: 8787
+      targetPort: 8787
+      nodePort: 30878
