@@ -93,19 +93,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       procps \
       lsof \
       sudo \
-      uidmap \
-      adduser
+      uidmap
 
 RUN npm install -g pnpm yarn --no-audit --no-fund && npm cache clean --force
 
 # Users own their pod — full sudo mirrors a VPS experience within the container boundary.
-# uidmap provides user namespace support (unshare --user) as an additional tool.
-# Pod security context requires allowPrivilegeEscalation: true + CAP_SETUID/SETGID for sudo.
-RUN addgroup --gid 1024 hermeswebui \
-    && adduser --uid 1024 --gid 1024 --disabled-password --gecos '' \
-               --home /home/hermeswebui hermeswebui \
-    && mkdir -p /opt/hermes-agent /opt/hermes-webui /workspace /home/hermeswebui/.hermes \
-    && chown -R 1024:1024 /opt/hermes-agent /opt/hermes-webui /workspace /home/hermeswebui \
+# Direct /etc/passwd write avoids depending on adduser/addgroup/useradd which differ
+# across Debian versions (addgroup removed in adduser 3.x on trixie).
+RUN echo 'hermeswebui:x:1024:1024::/home/hermeswebui:/bin/sh' >> /etc/passwd \
+    && echo 'hermeswebui:x:1024:' >> /etc/group \
+    && echo 'hermeswebui:!:19900:0:99999:7:::' >> /etc/shadow \
+    && mkdir -p /home/hermeswebui/.hermes /opt/hermes-agent /opt/hermes-webui /workspace \
+    && chown -R 1024:1024 /home/hermeswebui /opt/hermes-agent /opt/hermes-webui /workspace \
     && echo 'hermeswebui ALL=(root) NOPASSWD: ALL' > /etc/sudoers.d/hermeswebui \
     && chmod 440 /etc/sudoers.d/hermeswebui \
     && echo 'hermeswebui:100000:65536' >> /etc/subuid \
