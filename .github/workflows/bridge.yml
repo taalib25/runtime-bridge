@@ -33,8 +33,9 @@ jobs:
       cluster_name: hermes-test
       region: eu
     secrets:
-      NODE_IP: ${{ secrets.HETZNER_NODE_IP }}
-      SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
       BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
       GHCR_PAT: ${{ secrets.GHCR_PAT }}
       ADMIN_API_SECRET: ${{ secrets.ADMIN_API_SECRET }}

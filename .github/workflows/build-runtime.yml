@@ -46,16 +46,34 @@ jobs:
             ghcr.io/${{ env.IMAGE_OWNER }}/runtime-node-core:latest
             ghcr.io/${{ env.IMAGE_OWNER }}/runtime-node-core:sha-${{ github.sha }}
 
-      - name: Set up SSH
+      - name: Install cloudflared
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o /usr/local/bin/cloudflared
+          chmod +x /usr/local/bin/cloudflared
+
+      - name: Configure SSH via tunnel
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H 178.104.185.60 >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config << EOF
+          Host ssh.hermes-test.hermeshq.net
+            User root
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking no
+            ProxyCommand cloudflared access ssh --hostname ssh.hermes-test.hermeshq.net
+          EOF
 
       - name: Pull new image on node and restart instance pods
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          ssh root@178.104.185.60 bash << 'EOF'
+          ssh ssh.hermes-test.hermeshq.net bash << 'EOF'
             set -euo pipefail
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 

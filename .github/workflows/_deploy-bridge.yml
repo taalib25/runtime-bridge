@@ -10,9 +10,11 @@ on:
         required: true
         type: string
     secrets:
-      NODE_IP:
-        required: true
       SSH_PRIVATE_KEY:
+        required: true
+      CF_ACCESS_CLIENT_ID:
+        required: true
+      CF_ACCESS_CLIENT_SECRET:
         required: true
       BRIDGE_SECRET:
         required: true
@@ -24,6 +26,10 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      TUNNEL_HOST: ssh.${{ inputs.cluster_name }}.hermeshq.net
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,12 +37,24 @@ jobs:
         id: tag
         run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Set up SSH
+      - name: Install cloudflared
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o /usr/local/bin/cloudflared
+          chmod +x /usr/local/bin/cloudflared
+
+      - name: Configure SSH via tunnel
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H ${{ secrets.NODE_IP }} >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config << EOF
+          Host ${{ env.TUNNEL_HOST }}
+            User root
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking no
+            ProxyCommand cloudflared access ssh --hostname ${{ env.TUNNEL_HOST }}
+          EOF
 
       - uses: actions/setup-go@v5
         with:
@@ -53,11 +71,11 @@ jobs:
       - name: Load image into k3s
         run: |
           docker save hermes-bridge:${{ steps.tag.outputs.sha }} | \
-            ssh root@${{ secrets.NODE_IP }} "k3s ctr images import -"
+            ssh ${{ env.TUNNEL_HOST }} "k3s ctr images import -"
 
       - name: Pull runtime image on node
         run: |
-          ssh root@${{ secrets.NODE_IP }} \
+          ssh ${{ env.TUNNEL_HOST }} \
             "k3s ctr images pull \
               --user taalib25:${{ secrets.GHCR_PAT }} \
               ghcr.io/taalib25/runtime-node-core:latest"
@@ -73,11 +91,11 @@ jobs:
             -e "s|value: \"hermes-test\"|value: \"${CLUSTER_NAME}\"|g" \
             deploy/deployment-test.yaml > /tmp/deployment.yaml
 
-          scp deploy/rbac.yaml root@${{ secrets.NODE_IP }}:/tmp/rbac.yaml
-          scp deploy/service.yaml root@${{ secrets.NODE_IP }}:/tmp/service.yaml
-          scp /tmp/deployment.yaml root@${{ secrets.NODE_IP }}:/tmp/deployment.yaml
+          scp deploy/rbac.yaml ${{ env.TUNNEL_HOST }}:/tmp/rbac.yaml
+          scp deploy/service.yaml ${{ env.TUNNEL_HOST }}:/tmp/service.yaml
+          scp /tmp/deployment.yaml ${{ env.TUNNEL_HOST }}:/tmp/deployment.yaml
 
-          ssh root@${{ secrets.NODE_IP }} "
+          ssh ${{ env.TUNNEL_HOST }} "
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
             # Ensure bridge-auth secret exists with this cluster's secret
@@ -93,15 +111,17 @@ jobs:
 
       - name: Restart and wait for rollout
         run: |
-          ssh root@${{ secrets.NODE_IP }} "
+          ssh ${{ env.TUNNEL_HOST }} "
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml
             kubectl rollout restart deployment/hermes-bridge -n hermes-bridge
             kubectl rollout status deployment/hermes-bridge -n hermes-bridge --timeout=120s
           "
 
       - name: Smoke test
+        env:
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
         run: |
-          ssh root@${{ secrets.NODE_IP }} bash << 'EOF'
+          ssh ${{ env.TUNNEL_HOST }} bash << 'EOF'
             SECRET=$(KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
               kubectl -n hermes-bridge get secret bridge-auth \
               -o jsonpath='{.data.secret}' | base64 -d)
@@ -113,8 +133,6 @@ jobs:
 
             echo "Smoke test passed for cluster: $CLUSTER_NAME"
           EOF
-        env:
-          CLUSTER_NAME: ${{ inputs.cluster_name }}
 
       - name: Register cluster with backend
         run: |

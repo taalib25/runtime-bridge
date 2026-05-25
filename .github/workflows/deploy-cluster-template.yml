@@ -1,6 +1,13 @@
 # Copy this file and rename it e.g. deploy-cluster-eu-2.yml
 # Then create a GitHub Environment named "cluster-eu-2" with these secrets:
-#   NODE_IP, SSH_PRIVATE_KEY, BRIDGE_SECRET, GHCR_PAT, ADMIN_API_SECRET
+#   SSH_PRIVATE_KEY        — SSH private key whose public key is in root's authorized_keys on the node
+#   CF_ACCESS_CLIENT_ID    — Cloudflare Access service token client ID (from CF Zero Trust dashboard)
+#   CF_ACCESS_CLIENT_SECRET — Cloudflare Access service token secret
+#   BRIDGE_SECRET          — random secret for X-Bridge-Secret header
+#   GHCR_PAT               — GitHub PAT with packages:write
+#   ADMIN_API_SECRET       — shared secret for backend /api/admin/clusters endpoint
+#
+# NODE_IP is no longer needed — traffic routes via Cloudflare Tunnel (ssh.<cluster>.hermeshq.net).
 #
 # Trigger manually via Actions → "Deploy cluster-eu-2" → Run workflow
 # or add 'push: branches: [main]' to auto-deploy on every merge.
@@ -17,8 +24,9 @@ jobs:
       cluster_name: cluster-eu-2   # must match BRIDGE_CLUSTER_NAME in the env
       region: eu                    # eu | us | ap | etc.
     secrets:
-      NODE_IP: ${{ secrets.NODE_IP }}
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
       BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
       GHCR_PAT: ${{ secrets.GHCR_PAT }}
       ADMIN_API_SECRET: ${{ secrets.ADMIN_API_SECRET }}
