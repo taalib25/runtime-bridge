@@ -24,6 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -508,7 +509,12 @@ func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
 	}
 	_, err := b.KubeClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	if k8serrors.IsAlreadyExists(err) {
-		return nil
+		// Patch the label onto pre-existing namespaces so they're discoverable.
+		patch := []byte(`{"metadata":{"labels":{"hermeshq/managed-by":"bridge"}}}`)
+		_, err = b.KubeClient.CoreV1().Namespaces().Patch(
+			ctx, name, types.MergePatchType, patch, metav1.PatchOptions{},
+		)
+		return err
 	}
 	return err
 }
