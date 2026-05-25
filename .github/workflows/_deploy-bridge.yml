@@ -1,0 +1,130 @@
+name: Deploy Bridge (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      cluster_name:
+        required: true
+        type: string
+      region:
+        required: true
+        type: string
+    secrets:
+      NODE_IP:
+        required: true
+      SSH_PRIVATE_KEY:
+        required: true
+      BRIDGE_SECRET:
+        required: true
+      GHCR_PAT:
+        required: true
+      ADMIN_API_SECRET:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.NODE_IP }} >> ~/.ssh/known_hosts
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build bridge image
+        run: |
+          docker build \
+            --build-arg GIT_SHA=${{ steps.tag.outputs.sha }} \
+            -t hermes-bridge:${{ steps.tag.outputs.sha }} \
+            .
+
+      - name: Load image into k3s
+        run: |
+          docker save hermes-bridge:${{ steps.tag.outputs.sha }} | \
+            ssh root@${{ secrets.NODE_IP }} "k3s ctr images import -"
+
+      - name: Pull runtime image on node
+        run: |
+          ssh root@${{ secrets.NODE_IP }} \
+            "k3s ctr images pull \
+              --user taalib25:${{ secrets.GHCR_PAT }} \
+              ghcr.io/taalib25/runtime-node-core:latest"
+
+      - name: Render and apply manifests
+        env:
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          GIT_SHA: ${{ steps.tag.outputs.sha }}
+          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
+        run: |
+          sed \
+            -e "s|hermes-bridge:__GIT_SHA__|hermes-bridge:${GIT_SHA}|g" \
+            -e "s|value: \"hermes-test\"|value: \"${CLUSTER_NAME}\"|g" \
+            deploy/deployment-test.yaml > /tmp/deployment.yaml
+
+          scp deploy/rbac.yaml root@${{ secrets.NODE_IP }}:/tmp/rbac.yaml
+          scp deploy/service.yaml root@${{ secrets.NODE_IP }}:/tmp/service.yaml
+          scp /tmp/deployment.yaml root@${{ secrets.NODE_IP }}:/tmp/deployment.yaml
+
+          ssh root@${{ secrets.NODE_IP }} "
+            KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+            # Ensure bridge-auth secret exists with this cluster's secret
+            kubectl create namespace hermes-bridge --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n hermes-bridge create secret generic bridge-auth \
+              --from-literal=secret=${BRIDGE_SECRET} \
+              --dry-run=client -o yaml | kubectl apply -f -
+
+            kubectl apply -f /tmp/rbac.yaml
+            kubectl apply -f /tmp/service.yaml
+            kubectl apply -f /tmp/deployment.yaml
+          "
+
+      - name: Restart and wait for rollout
+        run: |
+          ssh root@${{ secrets.NODE_IP }} "
+            KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl rollout restart deployment/hermes-bridge -n hermes-bridge
+            kubectl rollout status deployment/hermes-bridge -n hermes-bridge --timeout=120s
+          "
+
+      - name: Smoke test
+        run: |
+          ssh root@${{ secrets.NODE_IP }} bash << 'EOF'
+            SECRET=$(KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
+              kubectl -n hermes-bridge get secret bridge-auth \
+              -o jsonpath='{.data.secret}' | base64 -d)
+
+            curl -sf -H "X-Bridge-Secret: $SECRET" \
+              http://localhost:8080/healthz | grep '"status":"ok"'
+            curl -sf -H "X-Bridge-Secret: $SECRET" \
+              http://localhost:8080/readyz | grep '"status":"ready"'
+
+            echo "Smoke test passed for cluster: $CLUSTER_NAME"
+          EOF
+        env:
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+
+      - name: Register cluster with backend
+        run: |
+          curl -sf -X POST https://api.hermeshq.net/api/admin/clusters \
+            -H "Authorization: Bearer ${{ secrets.ADMIN_API_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "cluster_id": "${{ inputs.cluster_name }}",
+              "bridge_url": "http://${{ secrets.NODE_IP }}:8080",
+              "bridge_secret": "${{ secrets.BRIDGE_SECRET }}",
+              "region": "${{ inputs.region }}",
+              "status": "active"
+            }'

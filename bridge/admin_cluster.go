@@ -13,13 +13,14 @@ const managedByLabel = "hermeshq/managed-by=bridge"
 
 // ClusterSummaryResponse is the payload for GET /v1/cluster/summary.
 type ClusterSummaryResponse struct {
-	ClusterID           string     `json:"clusterId"`
-	BridgeHealthy       bool       `json:"bridgeHealthy"`
-	KubernetesReachable bool       `json:"kubernetesReachable"`
-	NodeCount           int        `json:"nodeCount"`
-	InstanceCount       int        `json:"instanceCount"`
-	Pods                PodCounts  `json:"pods"`
-	LastSeenAt          time.Time  `json:"lastSeenAt"`
+	ClusterID           string        `json:"clusterId"`
+	BridgeHealthy       bool          `json:"bridgeHealthy"`
+	KubernetesReachable bool          `json:"kubernetesReachable"`
+	NodeCount           int           `json:"nodeCount"`
+	InstanceCount       int           `json:"instanceCount"`
+	Pods                PodCounts     `json:"pods"`
+	Resources           ClusterLoad   `json:"resources"`
+	LastSeenAt          time.Time     `json:"lastSeenAt"`
 }
 
 type PodCounts struct {
@@ -28,6 +29,14 @@ type PodCounts struct {
 	Failed       int `json:"failed"`
 	CrashLooping int `json:"crashLooping"`
 	Total        int `json:"total"`
+}
+
+// ClusterLoad is the sum of resource requests across all managed pods.
+// Used by the backend to score clusters for instance routing — mirrors how
+// the Kubernetes scheduler thinks about capacity (requests, not actual usage).
+type ClusterLoad struct {
+	ReservedCPUm      int64 `json:"reservedCpuM"`      // millicores
+	ReservedMemoryMiB int64 `json:"reservedMemoryMiB"` // mebibytes
 }
 
 // ClusterResourcesResponse is the payload for GET /v1/cluster/resources.
@@ -92,6 +101,7 @@ func (b *Bridge) GetClusterSummary(ctx context.Context) (ClusterSummaryResponse,
 	}
 
 	counts := PodCounts{}
+	load := ClusterLoad{}
 	for i := range allPods.Items {
 		pod := &allPods.Items[i]
 		if !managed[pod.Namespace] {
@@ -111,8 +121,19 @@ func (b *Bridge) GetClusterSummary(ctx context.Context) (ClusterSummaryResponse,
 		if isCrashLooping(pod) {
 			counts.CrashLooping++
 		}
+
+		// Sum resource requests across all containers in the pod.
+		for _, c := range pod.Spec.Containers {
+			if cpu := c.Resources.Requests.Cpu(); cpu != nil {
+				load.ReservedCPUm += cpu.MilliValue()
+			}
+			if mem := c.Resources.Requests.Memory(); mem != nil {
+				load.ReservedMemoryMiB += mem.Value() / (1024 * 1024)
+			}
+		}
 	}
 	out.Pods = counts
+	out.Resources = load
 	return out, nil
 }
 
