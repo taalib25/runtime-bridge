@@ -33,9 +33,4 @@ jobs:
       cluster_name: hermes-test
       region: eu
     secrets:
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-      BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
-      GHCR_PAT: ${{ secrets.GHCR_PAT }}
-      ADMIN_API_SECRET: ${{ secrets.ADMIN_API_SECRET }}
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

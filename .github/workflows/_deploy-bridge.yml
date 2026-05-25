@@ -10,32 +10,28 @@ on:
         required: true
         type: string
     secrets:
-      SSH_PRIVATE_KEY:
-        required: true
-      CF_ACCESS_CLIENT_ID:
-        required: true
-      CF_ACCESS_CLIENT_SECRET:
-        required: true
-      BRIDGE_SECRET:
-        required: true
-      GHCR_PAT:
-        required: true
-      ADMIN_API_SECRET:
+      DOPPLER_TOKEN:
         required: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       TUNNEL_HOST: ssh.${{ inputs.cluster_name }}.hermeshq.net
-      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Set image tag
         id: tag
         run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Doppler CLI
+        run: |
+          curl -Ls https://cli.doppler.com/install.sh | sh
+
+      - name: Load secrets from Doppler
+        run: doppler secrets download --no-file --format=env >> "$GITHUB_ENV"
 
       - name: Install cloudflared
         run: |
@@ -46,7 +42,7 @@ jobs:
       - name: Configure SSH via tunnel
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          doppler secrets get SSH_PRIVATE_KEY --plain > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           cat >> ~/.ssh/config << EOF
           Host ${{ env.TUNNEL_HOST }}
@@ -77,14 +73,13 @@ jobs:
         run: |
           ssh ${{ env.TUNNEL_HOST }} \
             "k3s ctr images pull \
-              --user taalib25:${{ secrets.GHCR_PAT }} \
+              --user taalib25:${GHCR_PAT} \
               ghcr.io/taalib25/runtime-node-core:latest"
 
       - name: Render and apply manifests
         env:
           CLUSTER_NAME: ${{ inputs.cluster_name }}
           GIT_SHA: ${{ steps.tag.outputs.sha }}
-          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
         run: |
           sed \
             -e "s|hermes-bridge:__GIT_SHA__|hermes-bridge:${GIT_SHA}|g" \
@@ -98,7 +93,6 @@ jobs:
           ssh ${{ env.TUNNEL_HOST }} "
             KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-            # Ensure bridge-auth secret exists with this cluster's secret
             kubectl create namespace hermes-bridge --dry-run=client -o yaml | kubectl apply -f -
             kubectl -n hermes-bridge create secret generic bridge-auth \
               --from-literal=secret=${BRIDGE_SECRET} \
@@ -135,14 +129,17 @@ jobs:
           EOF
 
       - name: Register cluster with backend
+        env:
+          CLUSTER_NAME: ${{ inputs.cluster_name }}
+          REGION: ${{ inputs.region }}
         run: |
           curl -sf -X POST https://api.hermeshq.net/api/admin/clusters \
-            -H "Authorization: Bearer ${{ secrets.ADMIN_API_SECRET }}" \
+            -H "Authorization: Bearer ${ADMIN_API_SECRET}" \
             -H "Content-Type: application/json" \
-            -d '{
-              "cluster_id": "${{ inputs.cluster_name }}",
-              "bridge_url": "http://${{ secrets.NODE_IP }}:8080",
-              "bridge_secret": "${{ secrets.BRIDGE_SECRET }}",
-              "region": "${{ inputs.region }}",
-              "status": "active"
-            }'
+            -d "{
+              \"cluster_id\":    \"${CLUSTER_NAME}\",
+              \"bridge_url\":    \"http://${NODE_IP}:8080\",
+              \"bridge_secret\": \"${BRIDGE_SECRET}\",
+              \"region\":        \"${REGION}\",
+              \"status\":        \"active\"
+            }"
