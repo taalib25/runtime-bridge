@@ -146,13 +146,19 @@ func TestDecodeInstanceRequest_InvalidInstanceIDFormat(t *testing.T) {
 	}
 }
 
-func TestDecodeInstanceRequest_InvalidPlan(t *testing.T) {
+func TestDecodeInstanceRequest_AnyPlanAccepted(t *testing.T) {
 	b := newTestBridge("s")
-	payload := `{"tenantId":"t1","plan":"premium"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
-	_, err := b.decodeInstanceRequest(req, testWID)
-	if err == nil || !strings.Contains(err.Error(), "plan") {
-		t.Fatalf("expected plan error, got %v", err)
+	// Backend decides plan values — bridge no longer validates the string.
+	for _, plan := range []string{"free", "pro", "enterprise", "premium", "custom-tier"} {
+		payload := `{"tenantId":"t1","plan":"` + plan + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
+		spec, err := b.decodeInstanceRequest(req, testWID)
+		if err != nil {
+			t.Fatalf("plan %q: unexpected error: %v", plan, err)
+		}
+		if spec.Plan != plan {
+			t.Fatalf("plan %q: got spec.Plan=%q", plan, spec.Plan)
+		}
 	}
 }
 

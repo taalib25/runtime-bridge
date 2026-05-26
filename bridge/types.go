@@ -50,8 +50,8 @@ type InstanceSpec struct {
 	IngressEnabled   *bool  `json:"ingressEnabled,omitempty"`
 	CreateNamespace  bool   `json:"createNamespace,omitempty"`
 	PersistenceClass string `json:"persistenceClass,omitempty"`
-	// Plan is the pricing tier: "free", "pro", "enterprise".
-	// Surfaces as pod label hermes.ai/plan for metrics and cost attribution.
+	// Plan is the pricing tier determined by the backend (e.g. "free", "pro").
+	// Surfaced as pod label hermes.ai/plan and PLAN env var for metrics — not validated by the bridge.
 	Plan string `json:"plan,omitempty"`
 	// RuntimeMode must be "runtime-node-core" or empty (treated as "runtime-node-core").
 	// Any other value is rejected with a 400. The bridge only supports the prebuilt

@@ -19,6 +19,8 @@ var k8sNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$`)
 
 func validInstanceID(id string) bool { return k8sNamePattern.MatchString(id) }
 
+const invalidInstanceIDMsg = "invalid instanceId: must be a valid DNS label (lowercase alphanumeric and hyphens, e.g. tenant-abc123)"
+
 func (b *Bridge) handleListInstances(w http.ResponseWriter, r *http.Request) {
 	instances, err := b.ListInstances(r.Context())
 	if err != nil {
@@ -92,7 +94,7 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleGetInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	instance, err := b.getInstance(r.Context(), instanceID)
@@ -110,7 +112,7 @@ func (b *Bridge) handleGetInstance(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 
@@ -146,7 +148,7 @@ func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	purge := r.URL.Query().Get("purge") == "true"
@@ -168,7 +170,7 @@ func (b *Bridge) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	status, err := b.GetInstanceStatus(r.Context(), instanceID)
@@ -186,7 +188,7 @@ func (b *Bridge) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleHealth(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	status, err := b.GetInstanceStatus(r.Context(), instanceID)
@@ -237,7 +239,7 @@ func (b *Bridge) handleGetOperation(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleListInstanceOperations(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	ops := b.runner.ListForInstance(instanceID)
@@ -260,7 +262,7 @@ func (b *Bridge) handleListInstanceOperations(w http.ResponseWriter, r *http.Req
 func (b *Bridge) handleRestartInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	op, existing := b.submitInstanceOperation("restart", instanceID, func(ctx context.Context) (string, error) {
@@ -276,7 +278,7 @@ func (b *Bridge) handleRestartInstance(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleRedeployInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	op, existing := b.submitInstanceOperation("redeploy", instanceID, func(ctx context.Context) (string, error) {
@@ -292,7 +294,7 @@ func (b *Bridge) handleRedeployInstance(w http.ResponseWriter, r *http.Request) 
 func (b *Bridge) handleRollbackInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	var req struct {
@@ -314,7 +316,7 @@ func (b *Bridge) handleRollbackInstance(w http.ResponseWriter, r *http.Request) 
 func (b *Bridge) handleRepairInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	op, existing := b.submitInstanceOperation("repair", instanceID, func(ctx context.Context) (string, error) {
@@ -331,7 +333,7 @@ func (b *Bridge) handleRepairInstance(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleUpgradeInstance(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	var req struct {
@@ -359,7 +361,7 @@ func (b *Bridge) handleUpgradeInstance(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	events, err := b.GetInstanceEvents(r.Context(), instanceID)
@@ -377,7 +379,7 @@ func (b *Bridge) handleGetEvents(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) handleRecreateTerminal(w http.ResponseWriter, r *http.Request) {
 	instanceID := mux.Vars(r)["id"]
 	if !validInstanceID(instanceID) {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid instanceId format: must match ws-[0-9a-f]{16}"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
 	session, err := b.RecreateTerminalSession(r.Context(), instanceID)
@@ -402,20 +404,13 @@ func (b *Bridge) decodeInstanceRequest(r *http.Request, instanceID string) (Inst
 	}
 	spec.InstanceID = instanceID
 	if !validInstanceID(instanceID) {
-		return InstanceSpec{}, fmt.Errorf("instanceId must match ws-[0-9a-f]{16}")
+		return InstanceSpec{}, fmt.Errorf(invalidInstanceIDMsg)
 	}
 	if strings.TrimSpace(spec.TenantID) == "" {
 		return InstanceSpec{}, fmt.Errorf("tenantId is required")
 	}
 	if spec.RuntimeMode != "" && spec.RuntimeMode != "runtime-node-core" {
 		return InstanceSpec{}, fmt.Errorf("unsupported runtimeMode %q: only \"runtime-node-core\" is accepted", spec.RuntimeMode)
-	}
-	if spec.Plan != "" {
-		switch spec.Plan {
-		case "free", "pro", "enterprise":
-		default:
-			return InstanceSpec{}, fmt.Errorf("plan must be one of: free, pro, enterprise")
-		}
 	}
 	return b.normalizeInstanceSpec(spec), nil
 }

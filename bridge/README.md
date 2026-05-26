@@ -160,7 +160,7 @@ The backend should store `clusterId` alongside `instanceId` to route future call
   "image": "ghcr.io/taalib25/runtime-node-core",
   "imageTag": "0.1.0",
   "runtimeMode": "runtime-node-core",
-  "plan": "free | pro | enterprise",
+  "plan": "backend-determined tier (e.g. free, pro)",
   "namespace": "ws-2d434ac4914de483",
   "createNamespace": true,
   "ingressEnabled": true,

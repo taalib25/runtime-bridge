@@ -60,20 +60,24 @@ except Exception as exc:
 PY
 
 # ── Bootstrap persisted config files (only if absent — never overwrite) ────────
-_provider="${HERMES_INFERENCE_PROVIDER:-opencode-go}"
-_model_with_prefix="${HERMES_WEBUI_DEFAULT_MODEL:-opencode-go/qwen3.6-plus}"
-_model_slug="${_model_with_prefix#*/}"   # strip "opencode-go/" prefix if present
+# Provider and model come from env vars set by the bridge at instance creation.
+# No hardcoded defaults — if not set, the webui handles the unauthenticated state.
+_provider="${HERMES_INFERENCE_PROVIDER:-}"
+_model_with_prefix="${HERMES_WEBUI_DEFAULT_MODEL:-}"
+_model_slug="${_model_with_prefix#*/}"   # strip "provider/" prefix if present
 
-if [ ! -f "$HERMES_HOME/auth.json" ]; then
+# Only write auth.json when a provider is explicitly configured by the backend.
+# OAuth providers (copilot, openai-codex, etc.) must complete login through the webui.
+if [ ! -f "$HERMES_HOME/auth.json" ] && [ -n "$_provider" ]; then
   log "Writing auth.json (provider: $_provider)"
   "$HERMES_WEBUI_PYTHON" -c "
 import json
-data = {'active_provider': '$_provider', 'providers': {'$_provider': {'authenticated': True}}}
+data = {'active_provider': '$_provider', 'providers': {'$_provider': {'authenticated': False}}}
 open('$HERMES_HOME/auth.json', 'w').write(json.dumps(data, indent=2))
 "
 fi
 
-if [ ! -f "$HERMES_CONFIG_PATH" ]; then
+if [ ! -f "$HERMES_CONFIG_PATH" ] && [ -n "$_provider" ] && [ -n "$_model_slug" ]; then
   log "Writing config.yaml (model: $_model_slug, provider: $_provider)"
   printf 'model:\n  name: %s\n  provider: %s\nproviders:\n  %s: {}\n' \
     "$_model_slug" "$_provider" "$_provider" > "$HERMES_CONFIG_PATH"

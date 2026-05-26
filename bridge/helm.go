@@ -832,6 +832,20 @@ func (b *Bridge) normalizeInstanceSpec(spec InstanceSpec) InstanceSpec {
 	if spec.Plan != "" {
 		spec.EnvMap["PLAN"] = spec.Plan
 	}
+	// Sync model config into env vars so start.sh and the webui use the same
+	// provider/model on first boot. Env vars win over config.yaml at runtime.
+	if m := spec.HermesConfig.Model; m != nil {
+		if m.Provider != "" {
+			spec.EnvMap["HERMES_INFERENCE_PROVIDER"] = m.Provider
+		}
+		if m.Default != "" {
+			spec.EnvMap["HERMES_WEBUI_DEFAULT_MODEL"] = m.Default
+			spec.EnvMap["HERMES_MODEL"] = m.Default
+		}
+		if m.BaseURL != "" {
+			spec.EnvMap["HERMES_BASE_URL"] = m.BaseURL
+		}
+	}
 	// Fall back to the bridge-level default if the caller didn't specify CORS origins.
 	if strings.TrimSpace(spec.CORSOrigins) == "" && strings.TrimSpace(b.Config.DefaultCORSOrigins) != "" {
 		spec.CORSOrigins = b.Config.DefaultCORSOrigins
