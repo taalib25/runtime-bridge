@@ -37,11 +37,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 ENV HERMES_HOME=/home/hermeswebui/.hermes \
+    HERMES_CONFIG_PATH=/home/hermeswebui/.hermes/config.yaml \
     HERMES_WEBUI_HOST=0.0.0.0 \
     HERMES_WEBUI_PORT=8787 \
     HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui \
     HERMES_WEBUI_DEFAULT_WORKSPACE=/workspace \
     HERMES_WEBUI_AGENT_DIR=/opt/hermes-agent \
+    HERMES_WEBUI_PYTHON=/opt/hermes-webui/.venv/bin/python \
     HERMES_WEBUI_SKIP_ONBOARDING=1 \
     HERMES_EXEC_ASK=false \
     HERMES_TIMEZONE=UTC \
@@ -112,17 +114,23 @@ RUN echo 'hermeswebui:x:1024:1024::/home/hermeswebui:/bin/sh' >> /etc/passwd \
 
 COPY --from=agent_source --chown=1024:1024 /agent-out /opt/hermes-agent
 
+# /opt/hermes is the canonical path the agent runtime resolves itself from.
+# Symlink keeps both names working without duplicating data.
+RUN ln -s /opt/hermes-agent /opt/hermes
+
 RUN git clone --depth 1 --branch "${HERMES_WEBUI_REF}" "${HERMES_WEBUI_REPO}" /opt/hermes-webui
 
 WORKDIR /opt/hermes-webui
 
+# Single shared venv — hermes-agent and hermes-webui installed together so
+# import paths are consistent and there is no venv-switching at runtime.
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m venv /opt/hermes-webui/.venv \
     && /opt/hermes-webui/.venv/bin/pip install --upgrade pip setuptools wheel \
+    && /opt/hermes-webui/.venv/bin/pip install -e /opt/hermes-agent \
     && if [ -f requirements.txt ]; then /opt/hermes-webui/.venv/bin/pip install -r requirements.txt; fi \
     && if [ -f pyproject.toml ]; then /opt/hermes-webui/.venv/bin/pip install -e .; fi \
-    && /opt/hermes-webui/.venv/bin/pip install /opt/hermes-agent \
-    && /opt/hermes-webui/.venv/bin/python -c "import run_agent; print('run_agent import ok')"
+    && /opt/hermes-webui/.venv/bin/python -c "from run_agent import AIAgent; print('run_agent.AIAgent import ok')"
 
 COPY --chown=1024:1024 extension/ /opt/hermescloud-extension/
 COPY --chown=1024:1024 start.sh /usr/local/bin/start-hermescloud-runtime

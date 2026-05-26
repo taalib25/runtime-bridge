@@ -8,6 +8,7 @@
   const TOUR_KEY    = 'hc-tour-done';
   const KB_HINT_KEY = 'hc-kb-hint-done';
   const BRAND_SKIN  = 'hermescloud';
+  const SESSION_LS  = 'hermes-webui-session'; // key webui uses to persist last session
 
   const STARTER_HINTS = [
     'Help me start a Python project',
@@ -18,31 +19,11 @@
   ];
 
   const TOUR_STEPS = [
-    {
-      labels: ['Chat', 'chat'],
-      title: 'Chat',
-      desc: 'Your main workspace. Just type what you need — the AI reads your files and writes code for you.',
-    },
-    {
-      labels: ['Terminal', 'terminal'],
-      title: 'Terminal',
-      desc: 'A real terminal inside your instance. Run commands, install packages, or manage files.',
-    },
-    {
-      labels: ['Tasks', 'tasks'],
-      title: 'Tasks',
-      desc: 'For longer jobs, the AI tracks progress here step by step.',
-    },
-    {
-      labels: ['Memory', 'memory'],
-      title: 'Memory',
-      desc: 'Facts the AI remembers about you across sessions — your preferences, how you like code written.',
-    },
-    {
-      labels: ['Settings', 'settings'],
-      title: 'Settings',
-      desc: 'Change appearance, font size, and theme. Your provider is managed by HermesCloud.',
-    },
+    { labels: ['Chat', 'chat'],       title: 'Chat',     desc: 'Your main workspace. Just type what you need — the AI reads your files and writes code for you.' },
+    { labels: ['Terminal','terminal'], title: 'Terminal', desc: 'A real terminal inside your instance. Run commands, install packages, or manage files.' },
+    { labels: ['Tasks','tasks'],       title: 'Tasks',    desc: 'For longer jobs, the AI tracks progress here step by step.' },
+    { labels: ['Memory','memory'],     title: 'Memory',   desc: 'Facts the AI remembers about you across sessions — your preferences, how you like code written.' },
+    { labels: ['Settings','settings'], title: 'Settings', desc: 'Change appearance, font size, and theme. Your provider is managed by HermesCloud.' },
   ];
 
   const HIDDEN_SETTING_LABELS = [
@@ -51,10 +32,8 @@
     'HERMES_HOME', 'Agent dir',
   ];
 
-  // Shell languages that get a "Run" button
   const SHELL_LANGS = new Set(['bash', 'sh', 'shell', 'console', 'zsh', 'fish']);
 
-  // Commands that need interactive input — shown with pulse + stronger label
   const AUTH_PATTERNS = [
     /hermes\s+auth/i,
     /gh\s+auth/i,
@@ -76,12 +55,20 @@
     }).observe(document.head, { childList: true, subtree: true });
   }
 
-  /* ── 2. Apply brand skin on first visit ────────────────────────── */
+  /* ── 2. Apply brand skin — always, every page load ─────────────── */
   function applyDefaultSkin() {
-    if (!localStorage.getItem(SKIN_KEY)) {
-      document.documentElement.dataset.skin = BRAND_SKIN;
-      localStorage.setItem(SKIN_KEY, BRAND_SKIN);
+    const skin = localStorage.getItem(SKIN_KEY) || BRAND_SKIN;
+    localStorage.setItem(SKIN_KEY, skin);
+
+    function apply() {
+      if (document.documentElement.dataset.skin !== skin)
+        document.documentElement.dataset.skin = skin;
     }
+    apply();
+    // Re-apply if webui resets data-skin during its own boot sequence
+    new MutationObserver(apply).observe(document.documentElement, {
+      attributes: true, attributeFilter: ['data-skin'],
+    });
   }
 
   /* ── 3. No-provider banner ─────────────────────────────────────── */
@@ -100,28 +87,21 @@
       '<span>⚠️ No AI provider configured for this instance.</span>' +
       '<button class="hc-link" id="hc-open-terminal">Open terminal</button>' +
       '<span>and run <code style="background:var(--code-bg);padding:1px 5px;border-radius:3px;font-size:0.9em">hermes-provider setup</code></span>';
-
-    banner.querySelector('#hc-open-terminal').addEventListener('click', openTerminal);
-
-    waitFor('main, [data-main], #app-root', (target) => {
-      target.insertAdjacentElement('afterbegin', banner);
-    });
+    banner.querySelector('#hc-open-terminal').addEventListener('click', () => ensureTerminal());
+    waitFor('main, [data-main], #app-root', (t) => t.insertAdjacentElement('afterbegin', banner));
   }
 
   /* ── 4. Intercept provider settings panel ──────────────────────── */
   function watchProviderSettings() {
     new MutationObserver(() => {
       const targets = [
-        ...document.querySelectorAll('[data-settings-section="providers"]'),
-        ...document.querySelectorAll('[data-section="providers"]'),
-        ...[...document.querySelectorAll('h2, h3, [class*="settings-heading"]')]
+        ...document.querySelectorAll('[data-settings-section="providers"],[data-section="providers"]'),
+        ...[...document.querySelectorAll('h2,h3,[class*="settings-heading"]')]
           .filter((el) => /provider/i.test(el.textContent)),
       ];
-
       targets.forEach((el) => {
         if (el.dataset.hcPatched) return;
         el.dataset.hcPatched = '1';
-
         const redirect = document.createElement('div');
         redirect.id = 'hc-provider-redirect';
         redirect.innerHTML =
@@ -129,12 +109,8 @@
           'Your AI provider and API key are pre-configured. To change them, ' +
           'open the <button class="hc-link" style="font:inherit;text-decoration:underline;' +
           'background:none;border:none;color:var(--accent);cursor:pointer" ' +
-          'id="hc-redirect-terminal">terminal</button> and run ' +
-          '<code>hermes-provider setup</code>.';
-
-        redirect.querySelector('#hc-redirect-terminal')
-          ?.addEventListener('click', openTerminal);
-
+          'id="hc-redirect-terminal">terminal</button> and run <code>hermes-provider setup</code>.';
+        redirect.querySelector('#hc-redirect-terminal')?.addEventListener('click', () => ensureTerminal());
         el.after(redirect);
         el.style.display = 'none';
       });
@@ -144,86 +120,62 @@
   /* ── 5. Hide internal settings rows ────────────────────────────── */
   function hideInternalSettings() {
     new MutationObserver(() => {
-      document.querySelectorAll(
-        'label, [class*="settings-label"], [class*="setting-row"], [class*="form-row"]'
-      ).forEach((el) => {
-        if (el.dataset.hcHidden) return;
-        const text = el.textContent.trim();
-        if (HIDDEN_SETTING_LABELS.some((label) => text.startsWith(label))) {
-          el.dataset.hcHidden = '1';
-          const row = el.closest(
-            '[class*="settings-row"], [class*="form-row"], [class*="setting-item"], li, tr'
-          ) ?? el;
-          row.style.display = 'none';
-        }
-      });
+      document.querySelectorAll('label,[class*="settings-label"],[class*="setting-row"],[class*="form-row"]')
+        .forEach((el) => {
+          if (el.dataset.hcHidden) return;
+          const text = el.textContent.trim();
+          if (HIDDEN_SETTING_LABELS.some((l) => text.startsWith(l))) {
+            el.dataset.hcHidden = '1';
+            (el.closest('[class*="settings-row"],[class*="form-row"],[class*="setting-item"],li,tr') ?? el)
+              .style.display = 'none';
+          }
+        });
     }).observe(document.body, { childList: true, subtree: true });
   }
 
-  /* ── 6. Starter hints in the composer ─────────────────────────── */
+  /* ── 6. Starter hints ──────────────────────────────────────────── */
   function showStarterHints() {
     if (localStorage.getItem(HINTS_KEY)) return;
-
-    waitFor(
-      'textarea[name="message"], #composer-input, [data-composer], textarea[placeholder]',
-      (composer) => {
-        if (document.getElementById('hc-starter-hints')) return;
-
-        const container = document.createElement('div');
-        container.id = 'hc-starter-hints';
-
-        STARTER_HINTS.forEach((text) => {
-          const chip = document.createElement('button');
-          chip.className = 'hc-hint-chip';
-          chip.textContent = text;
-          chip.addEventListener('click', () => {
-            composer.value = text;
-            composer.dispatchEvent(new Event('input', { bubbles: true }));
-            composer.focus();
-            dismissHints();
-          });
-          container.appendChild(chip);
+    waitFor('textarea[name="message"],#composer-input,[data-composer],textarea[placeholder]', (composer) => {
+      if (document.getElementById('hc-starter-hints')) return;
+      const container = document.createElement('div');
+      container.id = 'hc-starter-hints';
+      STARTER_HINTS.forEach((text) => {
+        const chip = document.createElement('button');
+        chip.className = 'hc-hint-chip';
+        chip.textContent = text;
+        chip.addEventListener('click', () => {
+          composer.value = text;
+          composer.dispatchEvent(new Event('input', { bubbles: true }));
+          composer.focus();
+          dismiss();
         });
-
-        (composer.closest('form') ?? composer.parentElement)
-          ?.insertAdjacentElement('beforebegin', container);
-
-        composer.addEventListener('input', () => {
-          if (composer.value.length > 0) dismissHints();
-        }, { once: true });
+        container.appendChild(chip);
+      });
+      (composer.closest('form') ?? composer.parentElement)?.insertAdjacentElement('beforebegin', container);
+      composer.addEventListener('input', () => { if (composer.value.length > 0) dismiss(); }, { once: true });
+      function dismiss() {
+        document.getElementById('hc-starter-hints')?.remove();
+        localStorage.setItem(HINTS_KEY, '1');
       }
-    );
-
-    function dismissHints() {
-      document.getElementById('hc-starter-hints')?.remove();
-      localStorage.setItem(HINTS_KEY, '1');
-    }
+    });
   }
 
-  /* ── 7. Sidebar tour (first visit only) ────────────────────────── */
+  /* ── 7. Sidebar tour ───────────────────────────────────────────── */
   function runSidebarTour() {
     if (localStorage.getItem(TOUR_KEY)) return;
-
-    waitFor('nav, [data-sidebar], aside', () => {
-      const highlight = document.createElement('div');
-      highlight.id = 'hc-tour-highlight';
+    waitFor('nav,[data-sidebar],aside', () => {
+      const highlight = document.createElement('div'); highlight.id = 'hc-tour-highlight';
+      const popover   = document.createElement('div'); popover.id   = 'hc-tour-popover';
       document.body.appendChild(highlight);
-
-      const popover = document.createElement('div');
-      popover.id = 'hc-tour-popover';
       document.body.appendChild(popover);
 
       function findNavItem(labels) {
         for (const label of labels) {
-          const el =
-            document.querySelector(`[aria-label="${label}"]`) ??
+          const el = document.querySelector(`[aria-label="${label}"]`) ??
             document.querySelector(`[title="${label}"]`) ??
-            [...document.querySelectorAll(
-              'nav a, nav button, [data-sidebar] a, [data-sidebar] button, aside a, aside button'
-            )].find((el) =>
-              el.textContent.trim() === label ||
-              el.getAttribute('aria-label') === label
-            );
+            [...document.querySelectorAll('nav a,nav button,[data-sidebar] a,[data-sidebar] button,aside a,aside button')]
+              .find((el) => el.textContent.trim() === label || el.getAttribute('aria-label') === label);
           if (el) return el;
         }
         return null;
@@ -233,85 +185,113 @@
 
       function showStep(index) {
         if (index >= validSteps.length) { endTour(); return; }
-        const step   = validSteps[index];
+        const step = validSteps[index];
         const target = findNavItem(step.labels);
         if (!target) { showStep(index + 1); return; }
-
-        const rect    = target.getBoundingClientRect();
-        highlight.style.cssText =
-          `top:${rect.top - 3}px;left:${rect.left - 3}px;` +
-          `width:${rect.width + 6}px;height:${rect.height + 6}px;display:block`;
-
+        const rect = target.getBoundingClientRect();
+        highlight.style.cssText = `top:${rect.top-3}px;left:${rect.left-3}px;width:${rect.width+6}px;height:${rect.height+6}px;display:block`;
         const popLeft = rect.right + 12;
         const popTop  = Math.min(rect.top, window.innerHeight - 220);
-
-        popover.innerHTML = `
-          <strong>${step.title}</strong>
-          <span>${step.desc}</span>
+        popover.innerHTML = `<strong>${step.title}</strong><span>${step.desc}</span>
           <div class="hc-tour-actions">
             <button class="hc-tour-skip">Skip tour</button>
-            <span class="hc-tour-step">${index + 1} / ${validSteps.length}</span>
-            <button class="hc-tour-next">${index + 1 < validSteps.length ? 'Next →' : 'Done'}</button>
+            <span class="hc-tour-step">${index+1} / ${validSteps.length}</span>
+            <button class="hc-tour-next">${index+1 < validSteps.length ? 'Next →' : 'Done'}</button>
           </div>`;
-
-        popover.style.cssText =
-          `left:${Math.min(popLeft, window.innerWidth - 260)}px;top:${popTop}px;display:block`;
-
+        popover.style.cssText = `left:${Math.min(popLeft,window.innerWidth-260)}px;top:${popTop}px;display:block`;
         popover.querySelector('.hc-tour-next').onclick = () => showStep(index + 1);
         popover.querySelector('.hc-tour-skip').onclick = endTour;
       }
 
       function endTour() {
-        highlight.remove();
-        popover.remove();
+        highlight.remove(); popover.remove();
         localStorage.setItem(TOUR_KEY, '1');
       }
-
       setTimeout(() => showStep(0), 800);
     });
   }
 
-  /* ── 8. Run in terminal ────────────────────────────────────────── */
-  async function runInTerminal(command) {
-    // Open terminal if not already open
-    if (typeof toggleComposerTerminal === 'function' && !TERMINAL_UI?.open) {
-      toggleComposerTerminal(true);
+  /* ── 8. ensureTerminal — navigate to session then open terminal ── */
+  //
+  // Full flow:
+  //   a) If no session is loaded (S.session is null), load the last-used session
+  //      from localStorage, or create a new one via newSession().
+  //   b) Call toggleComposerTerminal(true) — this opens the panel AND starts
+  //      the terminal session, setting TERMINAL_UI.sessionId when ready.
+  //   c) Wait for TERMINAL_UI.sessionId to be populated.
+  //   d) Return the session ID so the caller can send a command.
+  //
+  async function ensureTerminal() {
+    // ── a. Ensure a chat session is loaded ──────────────────────────
+    const hasSesh = () => typeof S !== 'undefined' && S.session && S.session.session_id;
+
+    if (!hasSesh()) {
+      const lastSid = localStorage.getItem(SESSION_LS);
+      if (lastSid && typeof loadSession === 'function') {
+        try { await loadSession(lastSid); } catch (_) {}
+      }
+      if (!hasSesh() && typeof newSession === 'function') {
+        try { await newSession(); } catch (_) {}
+      }
     }
 
-    // Wait for session ID (terminal takes a moment to connect)
-    const sid = await new Promise((resolve) => {
-      if (TERMINAL_UI?.sessionId) { resolve(TERMINAL_UI.sessionId); return; }
+    // ── b. Open terminal panel (webui global or DOM fallback) ───────
+    if (typeof toggleComposerTerminal === 'function') {
+      try { await toggleComposerTerminal(true); } catch (_) {}
+    } else {
+      // DOM fallback — find the terminal nav button
+      const btn =
+        document.querySelector('[aria-label="Terminal"],[aria-label="terminal"],[data-panel="terminal"],[title="Terminal"]') ??
+        [...document.querySelectorAll('nav a,nav button,aside a,aside button')]
+          .find((el) => /terminal/i.test(el.textContent + el.getAttribute('aria-label') + el.getAttribute('title')));
+      btn?.click();
+    }
+
+    // ── c. Wait for TERMINAL_UI.sessionId (set by _startComposerTerminal) ──
+    const termSid = await new Promise((resolve) => {
+      const check = () => typeof TERMINAL_UI !== 'undefined' && TERMINAL_UI.sessionId;
+      if (check()) { resolve(TERMINAL_UI.sessionId); return; }
       let elapsed = 0;
       const id = setInterval(() => {
-        elapsed += 200;
-        if (TERMINAL_UI?.sessionId) { clearInterval(id); resolve(TERMINAL_UI.sessionId); }
-        else if (elapsed > 5000)    { clearInterval(id); resolve(null); }
-      }, 200);
+        elapsed += 150;
+        if (check()) { clearInterval(id); resolve(TERMINAL_UI.sessionId); }
+        else if (elapsed > 6000) { clearInterval(id); resolve(null); }
+      }, 150);
     });
 
-    if (!sid) {
-      if (typeof showToast === 'function') showToast('Could not start terminal', 2600, 'error');
-      return;
-    }
-
-    await fetch('/api/terminal/input', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sid, data: command + '\r' }),
-    }).catch(() => {});
-
-    if (typeof showToast === 'function') showToast('Running in terminal…', 1800);
+    return termSid;
   }
 
-  /* ── 9. Watch code blocks — add Run buttons ────────────────────── */
-  function watchCodeBlocks() {
-    const target = document.getElementById('msgInner') ?? document.getElementById('messages');
-    if (!target) {
-      // Retry once DOM settles
-      setTimeout(watchCodeBlocks, 1000);
+  /* ── 9. runInTerminal — ensure session + terminal, then send ───── */
+  async function runInTerminal(command) {
+    const sid = await ensureTerminal();
+
+    if (!sid) {
+      hcToast('Could not start a terminal session — please open the Terminal tab manually and try again.', 4500, 'warn');
       return;
     }
+
+    try {
+      await fetch('/api/terminal/input', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sid, data: command + '\r' }),
+      });
+      hcToast('Running in terminal…', 1800);
+    } catch {
+      hcToast('Could not send to terminal — is the session still open?', 3000, 'error');
+    }
+  }
+
+  /* ── 10. Watch code blocks — add Run buttons ────────────────────── */
+  function watchCodeBlocks() {
+    const target =
+      document.getElementById('msgInner') ??
+      document.getElementById('messages') ??
+      document.querySelector('[data-messages],[data-chat-messages]');
+
+    if (!target) { setTimeout(watchCodeBlocks, 1200); return; }
 
     function processBlock(header) {
       if (header.dataset.hcRun) return;
@@ -319,82 +299,69 @@
       if (!pre || pre.tagName !== 'PRE') return;
       const code = pre.querySelector('code');
       if (!code) return;
-
-      // Detect language from class e.g. "language-bash"
       const langClass = [...code.classList].find((c) => c.startsWith('language-'));
-      const lang      = langClass ? langClass.replace('language-', '') : '';
+      const lang = langClass ? langClass.replace('language-', '') : '';
       if (!SHELL_LANGS.has(lang)) return;
 
       header.dataset.hcRun = '1';
+      const command = code.textContent.trim();
+      const isAuth  = AUTH_PATTERNS.some((p) => p.test(command));
 
-      const command  = code.textContent.trim();
-      const isAuth   = AUTH_PATTERNS.some((p) => p.test(command));
-      const btn      = document.createElement('button');
-      btn.className  = isAuth ? 'hc-run-btn hc-run-btn--auth' : 'hc-run-btn';
+      const btn = document.createElement('button');
+      btn.className   = isAuth ? 'hc-run-btn hc-run-btn--auth' : 'hc-run-btn';
       btn.textContent = isAuth ? '▶ Run (needs your input)' : '▶ Run';
-      btn.title       = 'Open terminal and run this command';
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        runInTerminal(command);
-      });
+      btn.title       = isAuth
+        ? 'Opens terminal and runs this command — you may need to interact with it'
+        : 'Open terminal and run this command';
+      btn.addEventListener('click', (e) => { e.stopPropagation(); runInTerminal(command); });
       header.appendChild(btn);
 
-      // Auth commands: open the terminal immediately so the user sees where to act.
-      if (isAuth) openTerminal();
+      // Auth commands: pre-open the terminal immediately so it's ready
+      if (isAuth) ensureTerminal();
     }
 
-    // Process any blocks already in DOM
     target.querySelectorAll('.pre-header').forEach(processBlock);
-
-    // Watch for new blocks as AI streams in
     new MutationObserver(() => {
       target.querySelectorAll('.pre-header:not([data-hc-run])').forEach(processBlock);
     }).observe(target, { childList: true, subtree: true });
   }
 
-  /* ── 10. Keyboard shortcut hint ────────────────────────────────── */
+  /* ── 11. Keyboard shortcut hint ────────────────────────────────── */
   function showKeyboardHint() {
     if (localStorage.getItem(KB_HINT_KEY)) return;
-
-    waitFor(
-      'button[type="submit"], [data-send-btn], #btnSend, button[aria-label*="Send" i]',
-      (sendBtn) => {
-        if (document.querySelector('.hc-kb-hint')) return;
-
-        const isMac  = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-        const hint   = document.createElement('span');
-        hint.className = 'hc-kb-hint';
-        hint.textContent = isMac ? '⌘↵ to send' : 'Ctrl↵ to send';
-        sendBtn.insertAdjacentElement('beforebegin', hint);
-
-        // Fade out after first message is sent
-        const messages = document.getElementById('messages') ?? document.getElementById('msgInner');
-        if (!messages) return;
-
-        new MutationObserver((_, obs) => {
-          // A user bubble appearing means a message was sent
-          if (messages.querySelector('[class*="user-msg"], [data-role="user"], .msg-user')) {
-            hint.classList.add('hc-kb-hint--fade');
-            setTimeout(() => {
-              hint.remove();
-              localStorage.setItem(KB_HINT_KEY, '1');
-            }, 600);
-            obs.disconnect();
-          }
-        }).observe(messages, { childList: true, subtree: true });
-      }
-    );
+    waitFor('button[type="submit"],[data-send-btn],#btnSend,button[aria-label*="Send" i]', (sendBtn) => {
+      if (document.querySelector('.hc-kb-hint')) return;
+      const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+      const hint  = document.createElement('span');
+      hint.className   = 'hc-kb-hint';
+      hint.textContent = isMac ? '⌘↵ to send' : 'Ctrl↵ to send';
+      sendBtn.insertAdjacentElement('beforebegin', hint);
+      const messages = document.getElementById('messages') ?? document.getElementById('msgInner');
+      if (!messages) return;
+      new MutationObserver((_, obs) => {
+        if (messages.querySelector('[class*="user-msg"],[data-role="user"],.msg-user')) {
+          hint.classList.add('hc-kb-hint--fade');
+          setTimeout(() => { hint.remove(); localStorage.setItem(KB_HINT_KEY, '1'); }, 600);
+          obs.disconnect();
+        }
+      }).observe(messages, { childList: true, subtree: true });
+    });
   }
 
-  /* ── Helper: open terminal panel ───────────────────────────────── */
-  function openTerminal() {
-    if (typeof toggleComposerTerminal === 'function') {
-      toggleComposerTerminal(true);
+  /* ── Helper: self-contained toast (no webui dependency) ────────── */
+  function hcToast(message, duration = 2400, type = 'info') {
+    if (typeof showToast === 'function') {
+      showToast(message, duration, type === 'error' ? 'error' : undefined);
       return;
     }
-    document.querySelector(
-      '[aria-label="Terminal"], [aria-label="terminal"], [data-panel="terminal"], [title="Terminal"]'
-    )?.click();
+    document.getElementById('hc-toast')?.remove();
+    const toast = document.createElement('div');
+    toast.id = 'hc-toast';
+    const bg = type === 'error' ? '#c0392b' : type === 'warn' ? '#e67e22' : '#2d6cdf';
+    toast.style.cssText = `position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:${bg};color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:99999;box-shadow:0 4px 16px rgba(0,0,0,0.25);max-width:420px;text-align:center;pointer-events:none`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), duration);
   }
 
   /* ── Helper: poll for element then run callback ─────────────────── */

@@ -12,28 +12,35 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// providerSecretKeys maps provider names to the env var / k8s Secret key they inject.
-// Sourced from the hermes-agent chart's supported provider list.
+// providerSecretKeys maps provider slugs to the env var key injected into the workspace pod.
+// Slugs must match the webui's canonical provider IDs (_PROVIDER_ENV_VAR in api/providers.py).
+// OAuth-flow providers (openai-codex, nous, copilot, qwen-oauth, xai-oauth) are NOT listed
+// here — their credentials are managed via the webui's device/OAuth flow, not API keys.
 var providerSecretKeys = map[string]string{
-	// Core western providers
+	// Core providers
 	"openai":     "OPENAI_API_KEY",
 	"anthropic":  "ANTHROPIC_API_KEY",
 	"openrouter": "OPENROUTER_API_KEY",
-	"gemini":     "GOOGLE_API_KEY",
+	"google":     "GOOGLE_API_KEY",
+	"gemini":     "GEMINI_API_KEY",
 	"groq":       "GROQ_API_KEY",
-	"mistral":    "MISTRAL_API_KEY",
-	// Nous Research
-	"nous": "NOUS_API_KEY",
+	"mistralai":  "MISTRAL_API_KEY",
+	"deepseek":   "DEEPSEEK_API_KEY",
+	"nvidia":     "NVIDIA_API_KEY",
+	"x-ai":       "XAI_API_KEY",
+	"lmstudio":   "LM_API_KEY",
+	"ollama-cloud": "OLLAMA_API_KEY",
 	// OpenCode inference tiers
 	"opencode-go":  "OPENCODE_GO_API_KEY",
 	"opencode-zen": "OPENCODE_ZEN_API_KEY",
-	// Chinese / Asia-Pacific providers
-	"glm":        "GLM_API_KEY",
+	// Asia-Pacific providers
+	"zai":        "GLM_API_KEY",   // ZhipuAI / GLM
+	"kimi-coding": "KIMI_API_KEY",
 	"minimax":    "MINIMAX_API_KEY",
-	"kimi":       "KIMI_API_KEY",
+	"minimax-cn": "MINIMAX_CN_API_KEY",
+	"xiaomi":     "XIAOMI_API_KEY",
+	// Dev tools
 	"huggingface": "HF_TOKEN",
-	// AI gateway / proxy
-	"ai-gateway": "AI_GATEWAY_API_KEY",
 }
 
 // instanceSecretName returns the k8s Secret name for a workspace's API keys.
