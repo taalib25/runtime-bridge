@@ -116,6 +116,10 @@ jobs:
         env:
           CLUSTER_NAME: ${{ inputs.cluster_name }}
 
+      - name: Prune old images
+        run: |
+          ssh root@${{ secrets.NODE_IP }} /usr/local/bin/hermescloud-cleanup || true
+
       - name: Register cluster with backend
         run: |
           curl -sf -X POST https://api.hermeshq.net/api/admin/clusters \
