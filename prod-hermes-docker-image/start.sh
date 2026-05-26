@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-log() { printf '[hermescloud-runtime] %s\n' "$*"; }
+log()  { printf '[hermescloud-runtime] %s\n' "$*"; }
 fail() { log "ERROR: $*"; /usr/local/bin/hermescloud-diagnose || true; exit 1; }
 
+# ── Canonical env vars (Dockerfile bakes these; shell defaults are a safety net) ──
 export HERMES_HOME="${HERMES_HOME:-/home/hermeswebui/.hermes}"
+export HERMES_CONFIG_PATH="${HERMES_CONFIG_PATH:-$HERMES_HOME/config.yaml}"
 export HERMES_WEBUI_HOST="${HERMES_WEBUI_HOST:-0.0.0.0}"
 export HERMES_WEBUI_PORT="${HERMES_WEBUI_PORT:-8787}"
 export HERMES_WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-$HERMES_HOME/webui}"
 export HERMES_WEBUI_DEFAULT_WORKSPACE="${HERMES_WEBUI_DEFAULT_WORKSPACE:-/workspace}"
 export HERMES_WEBUI_AGENT_DIR="${HERMES_WEBUI_AGENT_DIR:-/opt/hermes-agent}"
+export HERMES_WEBUI_PYTHON="${HERMES_WEBUI_PYTHON:-/opt/hermes-webui/.venv/bin/python}"
 export PATH="${PATH:-/home/hermeswebui/.hermes/bin:/home/hermeswebui/.local/bin:/opt/hermes-webui/.venv/bin:/usr/local/bin:/usr/bin:/bin}"
 
-# Required writable directories. In Kubernetes, fsGroup=1024 should make empty PVCs writable.
+# ── Required writable directories ─────────────────────────────────────────────
+# fsGroup=1024 in the k8s SecurityContext makes empty PVCs writable on first mount.
 mkdir -p \
   "$HERMES_HOME" \
   "$HERMES_WEBUI_STATE_DIR" \
@@ -29,48 +33,61 @@ mkdir -p \
   "$HERMES_HOME/.config" \
   /tmp/hermescloud
 
-# Fast permission diagnostics before WebUI fails in a confusing way.
-[ -w "$HERMES_HOME" ] || fail "$HERMES_HOME is not writable. Check PVC fsGroup/runAsUser."
-[ -w "$HERMES_WEBUI_DEFAULT_WORKSPACE" ] || fail "$HERMES_WEBUI_DEFAULT_WORKSPACE is not writable. Check workspace PVC permissions."
-[ -d "$HERMES_WEBUI_AGENT_DIR" ] || fail "HERMES_WEBUI_AGENT_DIR does not exist: $HERMES_WEBUI_AGENT_DIR"
-[ -f "$HERMES_WEBUI_AGENT_DIR/pyproject.toml" ] || fail "Hermes Agent pyproject.toml missing at $HERMES_WEBUI_AGENT_DIR"
+# ── Permission checks ──────────────────────────────────────────────────────────
+[ -w "$HERMES_HOME" ]                      || fail "$HERMES_HOME is not writable. Check PVC fsGroup/runAsUser."
+[ -w "$HERMES_WEBUI_DEFAULT_WORKSPACE" ]   || fail "/workspace is not writable. Check workspace PVC permissions."
+
+# ── Source validation ──────────────────────────────────────────────────────────
+[ -d "$HERMES_WEBUI_AGENT_DIR" ]           || fail "Agent source missing: $HERMES_WEBUI_AGENT_DIR"
+[ -f "$HERMES_WEBUI_AGENT_DIR/pyproject.toml" ] || fail "Agent pyproject.toml missing at $HERMES_WEBUI_AGENT_DIR"
+[ -d /opt/hermes-webui ]                   || fail "WebUI source missing: /opt/hermes-webui"
+[ -f /opt/hermes-webui/server.py ]         || fail "WebUI server.py missing: /opt/hermes-webui/server.py"
+[ -f "$HERMES_WEBUI_PYTHON" ]              || fail "WebUI Python missing: $HERMES_WEBUI_PYTHON"
 
 log "Starting HermesCloud runtime"
-log "user=$(id -u):$(id -g)"
-log "HERMES_HOME=$HERMES_HOME"
-log "HERMES_WEBUI_AGENT_DIR=$HERMES_WEBUI_AGENT_DIR"
-log "HERMES_WEBUI_DEFAULT_WORKSPACE=$HERMES_WEBUI_DEFAULT_WORKSPACE"
-log "HERMES_WEBUI_PORT=$HERMES_WEBUI_PORT"
+log "user=$(id -u):$(id -g)  home=$HERMES_HOME  port=$HERMES_WEBUI_PORT"
 
-cd /opt/hermes-webui
-
-python - <<'PY'
+# ── Python validation ──────────────────────────────────────────────────────────
+"$HERMES_WEBUI_PYTHON" - <<'PY'
 import sys
 print('python', sys.version)
 try:
-    import run_agent
-    print('run_agent import ok at runtime')
+    from run_agent import AIAgent
+    print('run_agent.AIAgent import ok')
 except Exception as exc:
-    print('run_agent import failed:', repr(exc))
+    print('run_agent.AIAgent import failed:', repr(exc))
     raise
 PY
 
-# Start the WebUI with common fallback entrypoints. This keeps the image useful if the WebUI repo changes naming.
-if [ -f startup.py ]; then
-  exec python startup.py
+# ── Bootstrap persisted config files (only if absent — never overwrite) ────────
+_provider="${HERMES_INFERENCE_PROVIDER:-opencode-go}"
+_model_with_prefix="${HERMES_WEBUI_DEFAULT_MODEL:-opencode-go/qwen3.6-plus}"
+_model_slug="${_model_with_prefix#*/}"   # strip "opencode-go/" prefix if present
+
+if [ ! -f "$HERMES_HOME/auth.json" ]; then
+  log "Writing auth.json (provider: $_provider)"
+  "$HERMES_WEBUI_PYTHON" -c "
+import json
+data = {'active_provider': '$_provider', 'providers': {'$_provider': {'authenticated': True}}}
+open('$HERMES_HOME/auth.json', 'w').write(json.dumps(data, indent=2))
+"
 fi
 
-if [ -f server.py ]; then
-  exec python server.py
+if [ ! -f "$HERMES_CONFIG_PATH" ]; then
+  log "Writing config.yaml (model: $_model_slug, provider: $_provider)"
+  printf 'model:\n  name: %s\n  provider: %s\nproviders:\n  %s: {}\n' \
+    "$_model_slug" "$_provider" "$_provider" > "$HERMES_CONFIG_PATH"
 fi
 
-if [ -f app.py ]; then
-  exec python app.py
+if [ ! -f "$HERMES_HOME/.env" ]; then
+  log "Creating empty .env"
+  touch "$HERMES_HOME/.env"
 fi
 
-# Some Python projects expose a module entrypoint after pip install -e .
-if python -c "import hermes_webui" >/dev/null 2>&1; then
-  exec python -m hermes_webui
-fi
+# ── Final validation ───────────────────────────────────────────────────────────
+[ -f "$HERMES_CONFIG_PATH" ] || fail "config.yaml missing after bootstrap: $HERMES_CONFIG_PATH"
+[ -f "$HERMES_HOME/.env" ]   || fail ".env missing after bootstrap: $HERMES_HOME/.env"
 
-fail "Could not find a WebUI startup file in /opt/hermes-webui"
+# ── Launch WebUI (explicit — no auto-detection) ────────────────────────────────
+cd /opt/hermes-webui
+exec "$HERMES_WEBUI_PYTHON" server.py
