@@ -77,14 +77,12 @@ jobs:
 
             export KUBECONFIG
 
-            echo "$NAMESPACES" | xargs -r -I{} \
-                kubectl rollout restart deployment \
-                  -n {} --ignore-not-found=true
+            echo "$NAMESPACES" | xargs -r -I{} sh -c \
+                'kubectl rollout restart deployment -n "$1" 2>/dev/null || true' _ {}
 
             echo "=== Waiting for rollouts to complete ==="
-            echo "$NAMESPACES" | xargs -r -I{} \
-                kubectl rollout status deployment \
-                  -n {} --timeout=120s 2>/dev/null || true
+            echo "$NAMESPACES" | xargs -r -I{} sh -c \
+                'kubectl rollout status deployment -n "$1" --timeout=120s 2>/dev/null || true' _ {}
 
             echo "Done."
           EOF
