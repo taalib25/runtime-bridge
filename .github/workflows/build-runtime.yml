@@ -75,13 +75,15 @@ jobs:
                 | grep '^ws-')
             fi
 
+            export KUBECONFIG
+
             echo "$NAMESPACES" | xargs -r -I{} \
-                KUBECONFIG=$KUBECONFIG kubectl rollout restart deployment \
+                kubectl rollout restart deployment \
                   -n {} --ignore-not-found=true
 
             echo "=== Waiting for rollouts to complete ==="
             echo "$NAMESPACES" | xargs -r -I{} \
-                KUBECONFIG=$KUBECONFIG kubectl rollout status deployment \
+                kubectl rollout status deployment \
                   -n {} --timeout=120s 2>/dev/null || true
 
             echo "Done."
