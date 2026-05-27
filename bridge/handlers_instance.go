@@ -151,16 +151,9 @@ func (b *Bridge) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf(invalidInstanceIDMsg))
 		return
 	}
-	purge := r.URL.Query().Get("purge") == "true"
-	if purge {
-		confirm := r.Header.Get("X-Confirm-Data-Deletion")
-		if confirm != instanceID {
-			writeError(w, http.StatusBadRequest, fmt.Errorf(
-				"purge=true requires header X-Confirm-Data-Deletion: %s — this permanently destroys all instance data including the PVC", instanceID,
-			))
-			return
-		}
-	}
+	// Purge is the default — delete removes everything (namespace, PVC, all data).
+	// Pass ?purge=false to do a soft delete (Helm uninstall only, keeps PVC).
+	purge := r.URL.Query().Get("purge") != "false"
 	op := b.submitOperation("delete", instanceID, func(ctx context.Context) error {
 		return b.DeleteInstance(ctx, instanceID, purge)
 	})
