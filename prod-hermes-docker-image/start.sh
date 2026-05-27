@@ -6,7 +6,6 @@ fail() { log "ERROR: $*"; /usr/local/bin/hermescloud-diagnose || true; exit 1; }
 
 # ── Canonical env vars (Dockerfile bakes these; shell defaults are a safety net) ──
 export HERMES_HOME="${HERMES_HOME:-/home/hermeswebui/.hermes}"
-export HERMES_CONFIG_PATH="${HERMES_CONFIG_PATH:-$HERMES_HOME/config.yaml}"
 export HERMES_WEBUI_HOST="${HERMES_WEBUI_HOST:-0.0.0.0}"
 export HERMES_WEBUI_PORT="${HERMES_WEBUI_PORT:-8787}"
 export HERMES_WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-$HERMES_HOME/webui}"
@@ -59,38 +58,14 @@ except Exception as exc:
     raise
 PY
 
-# ── Bootstrap persisted config files (only if absent — never overwrite) ────────
-# Provider and model come from env vars set by the bridge at instance creation.
-# No hardcoded defaults — if not set, the webui handles the unauthenticated state.
-_provider="${HERMES_INFERENCE_PROVIDER:-}"
-_model_with_prefix="${HERMES_WEBUI_DEFAULT_MODEL:-}"
-_model_slug="${_model_with_prefix#*/}"   # strip "provider/" prefix if present
-
-# Only write auth.json when a provider is explicitly configured by the backend.
-# OAuth providers (copilot, openai-codex, etc.) must complete login through the webui.
-if [ ! -f "$HERMES_HOME/auth.json" ] && [ -n "$_provider" ]; then
-  log "Writing auth.json (provider: $_provider)"
-  "$HERMES_WEBUI_PYTHON" -c "
-import json
-data = {'active_provider': '$_provider', 'providers': {'$_provider': {'authenticated': False}}}
-open('$HERMES_HOME/auth.json', 'w').write(json.dumps(data, indent=2))
-"
-fi
-
-if [ ! -f "$HERMES_CONFIG_PATH" ] && [ -n "$_provider" ] && [ -n "$_model_slug" ]; then
-  log "Writing config.yaml (model: $_model_slug, provider: $_provider)"
-  printf 'model:\n  name: %s\n  provider: %s\nproviders:\n  %s: {}\n' \
-    "$_model_slug" "$_provider" "$_provider" > "$HERMES_CONFIG_PATH"
-fi
-
+# ── Ensure .env exists (webui requires it) ────────────────────────────────────
 if [ ! -f "$HERMES_HOME/.env" ]; then
   log "Creating empty .env"
   touch "$HERMES_HOME/.env"
 fi
 
 # ── Final validation ───────────────────────────────────────────────────────────
-[ -f "$HERMES_CONFIG_PATH" ] || fail "config.yaml missing after bootstrap: $HERMES_CONFIG_PATH"
-[ -f "$HERMES_HOME/.env" ]   || fail ".env missing after bootstrap: $HERMES_HOME/.env"
+[ -f "$HERMES_HOME/.env" ] || fail ".env missing after bootstrap: $HERMES_HOME/.env"
 
 # ── Launch WebUI (explicit — no auto-detection) ────────────────────────────────
 cd /opt/hermes-webui
