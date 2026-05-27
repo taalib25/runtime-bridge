@@ -118,7 +118,9 @@ COPY --from=agent_source --chown=1024:1024 /agent-out /opt/hermes-agent
 # Symlink keeps both names working without duplicating data.
 RUN ln -s /opt/hermes-agent /opt/hermes
 
-RUN git clone --depth 1 --branch "${HERMES_WEBUI_REF}" "${HERMES_WEBUI_REPO}" /opt/hermes-webui
+RUN git clone --depth 1 --branch "${HERMES_WEBUI_REF}" "${HERMES_WEBUI_REPO}" /opt/hermes-webui \
+    && chown -R 1024:1024 /opt/hermes-webui \
+    && git config --system --add safe.directory /opt/hermes-webui
 
 WORKDIR /opt/hermes-webui
 
