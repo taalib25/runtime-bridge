@@ -540,17 +540,34 @@ func (b *Bridge) lookupRelease(_ context.Context, instanceID string) (*release.R
 	return nil, errInstanceNotFound(instanceID)
 }
 
-func (b *Bridge) ensureNamespace(ctx context.Context, name string) error {
+// ensureNamespace creates (or label-patches) the instance namespace. It always
+// carries the bridge's operational anchor hermeshq/managed-by=bridge (used by
+// drain + cluster summary), plus the contract labels/annotations supplied by the
+// caller. The anchor is set last so it can never be displaced.
+func (b *Bridge) ensureNamespace(ctx context.Context, name string, lbls, anns map[string]string) error {
+	labels := map[string]string{}
+	for k, v := range lbls {
+		labels[k] = v
+	}
+	labels[namespaceManagedByKey] = namespaceManagedByValue
+
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: map[string]string{"hermeshq/managed-by": "bridge"},
+			Name:        name,
+			Labels:      labels,
+			Annotations: anns,
 		},
 	}
 	_, err := b.KubeClient.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	if k8serrors.IsAlreadyExists(err) {
-		// Patch the label onto pre-existing namespaces so they're discoverable.
-		patch := []byte(`{"metadata":{"labels":{"hermeshq/managed-by":"bridge"}}}`)
+		// Patch labels (and annotations) onto pre-existing namespaces so they stay
+		// discoverable and the contract metadata is kept current.
+		patch, mErr := json.Marshal(map[string]any{
+			"metadata": map[string]any{"labels": labels, "annotations": anns},
+		})
+		if mErr != nil {
+			return mErr
+		}
 		_, err = b.KubeClient.CoreV1().Namespaces().Patch(
 			ctx, name, types.MergePatchType, patch, metav1.PatchOptions{},
 		)

@@ -5,6 +5,10 @@ metadata:
   name: {{ include "runtime-node-core.fullname" . }}-state
   labels:
     {{- include "runtime-node-core.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   accessModes:
     - {{ .Values.persistence.state.accessMode }}
@@ -23,6 +27,10 @@ metadata:
   name: {{ include "runtime-node-core.fullname" . }}-workspace
   labels:
     {{- include "runtime-node-core.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   accessModes:
     - {{ .Values.persistence.workspace.accessMode }}

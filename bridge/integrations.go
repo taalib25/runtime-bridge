@@ -100,7 +100,7 @@ func (b *Bridge) EnableIntegration(ctx context.Context, instanceID, platform str
 
 	// Patch k8s Secret with token keys.
 	if len(platformSecretKeys[platform]) > 0 {
-		secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName)
+		secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName, nil)
 		if err != nil {
 			return err
 		}
@@ -282,7 +282,7 @@ func (b *Bridge) SetIntegrations(ctx context.Context, instanceID string, desired
 	}
 
 	// Get current secret — create if missing.
-	secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName)
+	secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName, nil)
 	if err != nil {
 		return err
 	}

@@ -50,7 +50,10 @@ func (b *Bridge) instanceSecretName(instanceID string) string {
 }
 
 // getOrCreateInstanceSecret fetches the workspace k8s Secret, creating it if absent.
-func (b *Bridge) getOrCreateInstanceSecret(ctx context.Context, ns, secretName string) (*corev1.Secret, error) {
+// getOrCreateInstanceSecret returns the bridge-owned instance Secret, creating it
+// if absent. labels (the contract label set; pass nil to skip) are applied only on
+// creation — callers updating an existing instance's secret pass nil.
+func (b *Bridge) getOrCreateInstanceSecret(ctx context.Context, ns, secretName string, labels map[string]string) (*corev1.Secret, error) {
 	secret, err := b.KubeClient.CoreV1().Secrets(ns).Get(ctx, secretName, metav1.GetOptions{})
 	if err == nil {
 		return secret, nil
@@ -58,11 +61,16 @@ func (b *Bridge) getOrCreateInstanceSecret(ctx context.Context, ns, secretName s
 	if !k8serrors.IsNotFound(err) {
 		return nil, fmt.Errorf("get workspace secret: %w", err)
 	}
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	// This is a bridge-created (not Helm-rendered) resource; instanceLabels stamps
+	// app.kubernetes.io/managed-by=hermes-bridge.
 	secret = &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      secretName,
 			Namespace: ns,
-			Labels:    map[string]string{"hermes.ai/managed-by": "bridge"},
+			Labels:    labels,
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{},
@@ -90,7 +98,7 @@ func (b *Bridge) SetInstanceProvider(ctx context.Context, instanceID string, req
 	releaseName := rel.Name
 	secretName := b.instanceSecretName(instanceID)
 
-	secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName)
+	secret, err := b.getOrCreateInstanceSecret(ctx, ns, secretName, nil)
 	if err != nil {
 		return err
 	}

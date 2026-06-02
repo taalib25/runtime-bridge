@@ -38,6 +38,14 @@
         "create": { "type": "boolean" },
         "existingSecret": { "type": "string" }
       }
+    },
+    "commonLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "commonAnnotations": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
     }
   }
 }
