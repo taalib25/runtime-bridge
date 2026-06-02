@@ -127,3 +127,18 @@ probes:
     periodSeconds: 20
     timeoutSeconds: 5
     failureThreshold: 6
+
+# NetworkPolicy — allow ingress from Traefik + bridge, allow egress to internet + kube-dns,
+# block all other intra-cluster traffic.
+networkPolicy:
+  enabled: true
+  traefikNamespace: kube-system   # namespace Traefik runs in (k3s default)
+  bridgeNamespace: hermes-bridge  # namespace the bridge runs in
+  clusterCIDR: 10.42.0.0/16       # k3s flannel pod CIDR — excluded from internet egress
+  serviceCIDR: 10.43.0.0/16       # k3s service CIDR — excluded from internet egress
+
+# ResourceQuota + LimitRange — hard-cap the namespace to 1 pod and 2 PVCs,
+# bounded by the resource values above. Prevents a compromised instance from
+# spawning additional workloads.
+resourceQuota:
+  enabled: true
