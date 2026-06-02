@@ -42,6 +42,11 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := validateBackendMetadata(spec); err != nil {
+		b.Logger.Printf("[CreateInstance] label contract violation for %s: %v", instanceID, err)
+		writeError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
 
 	// Throttle: if a create is already in-flight for this instance, return the
 	// existing key immediately without launching another Helm install.
@@ -135,6 +140,10 @@ func (b *Bridge) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	spec, err := b.decodeInstanceRequest(r, instanceID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := validateBackendMetadata(spec); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err)
 		return
 	}
 

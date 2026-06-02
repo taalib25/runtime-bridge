@@ -1,6 +1,11 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# Backend-owned business metadata (hermescloud.dev/*), injected by the bridge.
+# Merged into every resource's metadata. See docs/label-contract.md.
+commonLabels: {}
+commonAnnotations: {}
+
 replicaCount: 1
 
 image:

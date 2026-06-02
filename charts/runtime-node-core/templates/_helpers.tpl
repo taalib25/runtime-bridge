@@ -19,7 +19,17 @@
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+Common labels.
+Backend-owned commonLabels (hermescloud.dev/*) are emitted FIRST so the
+chart/bridge-owned standard labels below always win on any key collision
+(YAML last-key-wins) — commonLabels can never override selectorLabels.
+See docs/label-contract.md.
+*/}}
 {{- define "runtime-node-core.labels" -}}
+{{- with .Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
 helm.sh/chart: {{ include "runtime-node-core.chart" . }}
 {{ include "runtime-node-core.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
@@ -27,9 +37,23 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: runtime-node-core
 {{- end -}}
 
+{{/*
+Selector labels — immutable Kubernetes identity only. Never include business
+metadata or commonLabels here; this set is used in immutable Deployment selectors.
+*/}}
 {{- define "runtime-node-core.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "runtime-node-core.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}
+
+{{/*
+Common annotations — backend-owned commonAnnotations (hermescloud.dev/*).
+Emits nothing when unset, so callers guard with `with`.
+*/}}
+{{- define "runtime-node-core.annotations" -}}
+{{- with .Values.commonAnnotations }}
+{{ toYaml . }}
+{{- end }}
 {{- end -}}
 
 {{- define "runtime-node-core.image" -}}

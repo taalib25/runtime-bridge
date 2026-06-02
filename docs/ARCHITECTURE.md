@@ -25,8 +25,10 @@ The bridge owns:
 
 | Area | Detail |
 |------|--------|
-| Runtime lifecycle | Create, update, delete Hermes runtime instances via Helm |
-| Runtime operations | Restart, redeploy, rollback, repair |
+| Runtime lifecycle | Create, update, delete Hermes runtime instances via Helm (async ops, poll by ID; delete supersedes in-flight ops) |
+| Runtime operations | Restart, redeploy, rollback, repair, upgrade (auto-rollback on health fail) |
+| Cluster operations | Maintenance mode (blocks new creates) and drain (delete all instances) |
+| Resource metadata | Validate + apply backend `hermescloud.dev/*` labels/annotations; own k8s identity labels |
 | Secret management | Provider API keys patched directly into workspace k8s Secret |
 | Messaging integrations | Platform token secrets + env var flags (Telegram, Discord, Slack, WhatsApp, Signal, DingTalk, Feishu, WeCom, BlueBubbles) |
 | Provider config | LLM provider key registration + model/base-URL config via Helm upgrade |
@@ -82,3 +84,9 @@ See `charts/README.md` for chart selection rationale.
 
 The default internal unit is an isolated Hermes instance, not a raw Kubernetes pod
 exposed directly to customers.
+
+## Related specs
+
+- [instance-lifecycle.md](instance-lifecycle.md) — operation model, recovery ops, maintenance/drain
+- [label-contract.md](label-contract.md) — backend↔bridge label/annotation contract
+- [README.md](README.md) — full docs index

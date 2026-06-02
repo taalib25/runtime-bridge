@@ -125,8 +125,8 @@ POST /api/instances
 → Return 202: { instanceId, status: "queued" }
 
 CF Queue consumer:
-  1. POST cluster.bridge_url/v1/instances   (InstanceSpec body, X-Bridge-Secret header)
-  2. Poll bridge GET /v1/instances/:id until phase == "running" or timeout
+  1. POST cluster.bridge_url/v1/instances/:id  (InstanceSpec body, X-Bridge-Secret header)
+  2. Poll bridge GET /v1/instances/:id until phase == "ready" or timeout
   3. Update DB instances table: status = active, cluster_id, bridge_url
   4. Optionally push WS or SSE event to user
 ```
@@ -135,10 +135,13 @@ CF Queue consumer:
 ```
 queued → routing → provisioning → starting → healthy
 ```
-Map bridge instance phases:
-- `Pending` → "provisioning"
-- `Running` (pods not all ready) → "starting"  
-- `Running` (all containers ready) → "healthy"
+Map bridge instance `phase` (lowercase, derived by the bridge):
+- `creating` → "provisioning" (pod not yet scheduled / init containers running)
+- `starting` → "starting" (pod Running, health probe not yet passing)
+- `ready` → "healthy"
+- `error` → container/image/schedule failure (needs attention)
+- `failed` → pod-level failure
+- `deleted` → release soft-deleted (stop polling)
 
 ---
 
@@ -167,6 +170,13 @@ Map bridge instance phases:
     "subdomain": "ws-<hex>",
     "host":      "hermeshq.net",
     "scheme":    "https"
+  },
+  "commonLabels": {
+    "hermescloud.dev/plan": "pro",
+    "hermescloud.dev/workspace-id": "wsp_..."
+  },
+  "commonAnnotations": {
+    "hermescloud.dev/display-name": "Ada's Workspace"
   }
 }
 ```
@@ -176,6 +186,10 @@ Notes:
 - `imageTag: "latest"` → bridge auto-sets `imagePullPolicy: Always` if not specified
 - `secrets` keys become k8s Secret entries injected as env vars
 - `network.subdomain` drives the Traefik IngressRoute hostname — must be globally unique
+- `commonLabels`/`commonAnnotations` (optional): backend-owned business metadata under
+  `hermescloud.dev/*` **only**. Bridge rejects any other prefix (incl. `app.kubernetes.io/*`,
+  `helm.sh/*`, `hermeshq/*`) and oversize label values with **422**. Full-replace on PUT.
+  Never used by control ops. Full rules: repo `docs/label-contract.md`.
 
 ---
 
@@ -183,28 +197,52 @@ Notes:
 
 | Method | Path | Body / Params | Description |
 |--------|------|---------------|-------------|
-| `POST` | `/v1/instances` | InstanceSpec JSON | Create instance (Helm install) |
+| `POST` | `/v1/instances/:id` | InstanceSpec JSON | Create instance (Helm install). 503 in maintenance, 422 on bad labels |
 | `GET` | `/v1/instances` | — | List all instances on this cluster |
 | `GET` | `/v1/instances/:id` | — | Get instance status + phase |
-| `PUT` | `/v1/instances/:id` | InstanceSpec JSON | Update (Helm upgrade) |
-| `DELETE` | `/v1/instances/:id` | — | Delete instance + namespace |
-| `GET` | `/v1/cluster/summary` | — | Pod counts, resource load, k8s health |
+| `PUT` | `/v1/instances/:id` | InstanceSpec JSON | Update (Helm upgrade). 422 on bad labels |
+| `DELETE` | `/v1/instances/:id` | `?purge=false` soft-deletes | Delete instance + namespace. Supersedes in-flight ops |
+| `POST` | `/v1/instances/:id/restart` | — | Rolling restart → 202 + Operation |
+| `POST` | `/v1/instances/:id/redeploy` | — | Re-run Helm upgrade from stored spec → 202 |
+| `POST` | `/v1/instances/:id/upgrade` | `{image,imageTag}` | Upgrade image/tag, auto-rollback on health fail → 202 |
+| `POST` | `/v1/instances/:id/rollback` | `{version}` (0=prev) | Helm rollback → 202 |
+| `POST` | `/v1/instances/:id/repair` | — | Bounded auto-recovery → 202 |
+| `GET` | `/v1/instances/:id/operations` | `?limit=N` | Recent operations for instance |
+| `GET` | `/v1/operations/:id` | — | Operation status |
+| `GET` | `/v1/cluster/summary` | — | Pod counts, resource load, k8s health, `maintenance`/`draining` |
 | `GET` | `/v1/cluster/resources` | — | Per-node allocatable CPU/mem + pressure |
+| `GET`/`PUT` | `/v1/cluster/maintenance` | `{enabled}` | Get/set maintenance mode (blocks creates with 503) |
+| `POST` | `/v1/cluster/drain` | `{purge}` | Maintenance + delete all instances → 202 |
 | `GET` | `/v1/instances/:id/diagnostics` | — | Pod logs, events, recommendation |
 | `GET` | `/v1/instances/:id/profiles` | — | Hermes profile list (proxied) |
 | `GET` | `/api/providers` | — | Configured LLM providers (proxied) |
 
+**Async operation model:** every mutating call (create/update/delete + all lifecycle
+ops) returns `202` with an `Operation` `{id,type,instanceId,status,message,startedAt}`;
+poll `GET /v1/operations/:id`. `status`: `running → succeeded | failed | superseded`
+(`superseded` = a delete cancelled it — not an error). One op in flight per instance
+(409 on conflict); delete always wins. See repo `docs/instance-lifecycle.md`.
+
 **Instance status response fields** (from `GET /v1/instances/:id`):
 ```json
 {
-  "instanceId": "ws-abc123",
-  "phase":      "Running | Pending | Failed | Unknown",
-  "ready":      true,
-  "podName":    "ws-abc123-hermes-instance-abc-xyz",
-  "namespace":  "ws-abc123",
-  "url":        "https://ws-abc123.hermeshq.net"
+  "instanceId":    "ws-abc123",
+  "phase":         "creating | starting | ready | error | failed | deleted",
+  "healthy":       true,
+  "namespace":     "ws-abc123",
+  "url":           "https://ws-abc123.hermeshq.net",
+  "replicas":      1,
+  "readyReplicas": 1,
+  "podPhase":      "Running",
+  "waitingReason": "",
+  "restartCount":  0,
+  "selectorLabels":    { "app.kubernetes.io/name": "runtime-node-core", "app.kubernetes.io/instance": "ws-abc123" },
+  "commonLabels":      { "hermescloud.dev/plan": "pro" },
+  "commonAnnotations": { "hermescloud.dev/display-name": "Ada" }
 }
 ```
+`selectorLabels`/`commonLabels`/`commonAnnotations` echo the effective label contract
+for round-trip verification.
 
 ---
 

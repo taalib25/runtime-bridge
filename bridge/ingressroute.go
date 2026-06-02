@@ -37,7 +37,28 @@ func (b *Bridge) resolveTraefikIngressRouteGVR() (schema.GroupVersionResource, e
 // It creates two routes on the websecure entrypoint:
 //  1. OPTIONS requests — CORS middleware only (no ForwardAuth, so browser preflights pass)
 //  2. All other requests — CORS + ForwardAuth (JWT validated and swapped)
-func (b *Bridge) EnsureIngressRoute(ctx context.Context, namespace, host, serviceName string, servicePort int, hasCORS, hasAuth bool) error {
+// ingressRouteMetadata builds the metadata map for an imperative IngressRoute,
+// attaching the contract labels/annotations. Empty maps are omitted.
+func ingressRouteMetadata(name, namespace string, lbls, anns map[string]string) map[string]any {
+	meta := map[string]any{"name": name, "namespace": namespace}
+	if len(lbls) > 0 {
+		labels := make(map[string]any, len(lbls))
+		for k, v := range lbls {
+			labels[k] = v
+		}
+		meta["labels"] = labels
+	}
+	if len(anns) > 0 {
+		annotations := make(map[string]any, len(anns))
+		for k, v := range anns {
+			annotations[k] = v
+		}
+		meta["annotations"] = annotations
+	}
+	return meta
+}
+
+func (b *Bridge) EnsureIngressRoute(ctx context.Context, namespace, host, serviceName string, servicePort int, hasCORS, hasAuth bool, lbls, anns map[string]string) error {
 	gvr, err := b.resolveTraefikIngressRouteGVR()
 	if err != nil {
 		return err
@@ -89,10 +110,7 @@ func (b *Bridge) EnsureIngressRoute(ctx context.Context, namespace, host, servic
 		Object: map[string]any{
 			"apiVersion": gvr.Group + "/" + gvr.Version,
 			"kind":       "IngressRoute",
-			"metadata": map[string]any{
-				"name":      namespace,
-				"namespace": namespace,
-			},
+			"metadata": ingressRouteMetadata(namespace, namespace, lbls, anns),
 			"spec": map[string]any{
 				"entryPoints": []any{"websecure"},
 				"routes":      routes,

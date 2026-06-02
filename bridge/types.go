@@ -46,12 +46,20 @@ type InstanceSpec struct {
 	Tolerations     []map[string]any  `json:"tolerations,omitempty"`
 	Annotations     map[string]string `json:"annotations,omitempty"`
 	Labels          map[string]string `json:"labels,omitempty"`
+	// CommonLabels and CommonAnnotations are backend-owned business metadata under
+	// the hermescloud.dev/* prefix, applied to every resource the bridge creates.
+	// The bridge validates and persists them but never invents or mutates them.
+	// See docs/label-contract.md.
+	CommonLabels      map[string]string `json:"commonLabels,omitempty"`
+	CommonAnnotations map[string]string `json:"commonAnnotations,omitempty"`
 	// IngressEnabled defaults to true. Set explicitly to false to disable.
 	IngressEnabled   *bool  `json:"ingressEnabled,omitempty"`
 	CreateNamespace  bool   `json:"createNamespace,omitempty"`
 	PersistenceClass string `json:"persistenceClass,omitempty"`
 	// Plan is the pricing tier determined by the backend (e.g. "free", "pro").
-	// Surfaced as pod label hermes.ai/plan and PLAN env var for metrics — not validated by the bridge.
+	// For resource labelling, backend sends it as hermescloud.dev/plan in CommonLabels
+	// (see docs/label-contract.md); this field is kept for the PLAN env var / metrics.
+	// Not validated by the bridge.
 	Plan string `json:"plan,omitempty"`
 	// RuntimeMode must be "runtime-node-core" or empty (treated as "runtime-node-core").
 	// Any other value is rejected with a 400. The bridge only supports the prebuilt
@@ -320,6 +328,12 @@ type InstanceStatus struct {
 	CreatedAt     time.Time `json:"createdAt,omitempty"`
 	LastCheckedAt time.Time `json:"lastCheckedAt,omitempty"`
 	Spec InstanceSpec `json:"spec,omitempty"`
+	// SelectorLabels, CommonLabels, and CommonAnnotations echo the effective label
+	// contract applied to this instance, so the backend can verify round-trip and
+	// detect drift. See docs/label-contract.md.
+	SelectorLabels    map[string]string `json:"selectorLabels,omitempty"`
+	CommonLabels      map[string]string `json:"commonLabels,omitempty"`
+	CommonAnnotations map[string]string `json:"commonAnnotations,omitempty"`
 }
 
 type Instance struct {

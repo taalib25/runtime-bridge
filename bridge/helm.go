@@ -47,7 +47,7 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 
 	createNS := spec.CreateNamespace || b.Config.CreateNamespace
 	if createNS {
-		if err := b.ensureNamespace(ctx, ns); err != nil {
+		if err := b.ensureNamespace(ctx, ns, b.instanceLabels(spec), b.instanceAnnotations(spec)); err != nil {
 			b.trackOperation("create", "failure", started)
 			return nil, fmt.Errorf("ensure namespace: %w", err)
 		}
@@ -57,7 +57,7 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 	// (e.g. API_SERVER_KEY). The Secret must exist before the Deployment starts so
 	// secretKeyRef env vars resolve correctly.
 	if len(spec.Secrets) > 0 {
-		wsSecret, err := b.getOrCreateInstanceSecret(ctx, ns, b.instanceSecretName(spec.InstanceID))
+		wsSecret, err := b.getOrCreateInstanceSecret(ctx, ns, b.instanceSecretName(spec.InstanceID), b.instanceLabels(spec))
 		if err != nil {
 			b.trackOperation("create", "failure", started)
 			return nil, fmt.Errorf("seed workspace secret: %w", err)
@@ -126,7 +126,7 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 
 	if hasCORS || hasAuth {
 		host := spec.Network.host()
-		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth); err != nil {
+		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth, b.instanceLabels(spec), b.instanceAnnotations(spec)); err != nil {
 			b.Logger.Printf("[CreateInstance] Warning: failed to create IngressRoute: %v", err)
 		} else {
 			// Remove the Helm-managed Ingress so only IngressRoute routes this host.
@@ -290,7 +290,7 @@ func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*releas
 
 	if hasCORS || hasAuth {
 		host := spec.Network.host()
-		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth); err != nil {
+		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth, b.instanceLabels(spec), b.instanceAnnotations(spec)); err != nil {
 			b.Logger.Printf("[UpdateInstance] Warning: failed to update IngressRoute: %v", err)
 		} else {
 			b.deleteHelmIngress(ctx, ns)
@@ -423,8 +423,14 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"tolerations":  spec.Tolerations,
 	}
 
-	if spec.Plan != "" {
-		values["podLabels"] = map[string]any{"hermes.ai/plan": spec.Plan}
+	// Backend-owned business metadata (hermescloud.dev/*). The chart merges these
+	// into every resource's metadata; the bridge never invents them. Validated at
+	// the handler before reaching here. See docs/label-contract.md.
+	if len(spec.CommonLabels) > 0 {
+		values["commonLabels"] = spec.CommonLabels
+	}
+	if len(spec.CommonAnnotations) > 0 {
+		values["commonAnnotations"] = spec.CommonAnnotations
 	}
 
 	policy := strings.TrimSpace(spec.ImagePullPolicy)
@@ -658,7 +664,31 @@ func instanceSpecFromRelease(defaultInstanceID string, values map[string]any, na
 	// preserves existing secretKeyRef entries without explicit secretKeysFromRelease calls.
 	spec.Secrets = secretKeysFromRelease(values)
 	spec.HermesConfig = hermesConfigFromRelease(values)
+	// Restore backend-owned metadata so internal ops (repair/redeploy/upgrade),
+	// which rebuild the spec from the stored release, don't silently strip labels.
+	spec.CommonLabels = stringMapFromValues(instanceValues, "commonLabels")
+	spec.CommonAnnotations = stringMapFromValues(instanceValues, "commonAnnotations")
 	return spec, nil
+}
+
+// stringMapFromValues extracts a map[string]string stored under key in a
+// Helm-values map (where nested maps decode as map[string]any with string values).
+// Returns nil when absent or empty.
+func stringMapFromValues(values map[string]any, key string) map[string]string {
+	raw, ok := values[key].(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if s, ok := v.(string); ok {
+			out[k] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // hermesConfigFromRelease extracts the HermesConfig stored under config.values

@@ -64,6 +64,10 @@ func (b *Bridge) collectInstanceStatus(ctx context.Context, spec InstanceSpec, r
 		CreatedAt:     createdAt.UTC(),
 		LastCheckedAt: time.Now().UTC(),
 		Spec:          spec,
+		// Echo the effective label contract so the backend can verify round-trip.
+		SelectorLabels:    deriveSelectorLabels(releaseName),
+		CommonLabels:      spec.CommonLabels,
+		CommonAnnotations: spec.CommonAnnotations,
 	}
 
 	if dep := selectDeployment(deployments.Items, releaseName); dep != nil {

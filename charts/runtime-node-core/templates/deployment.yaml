@@ -4,6 +4,10 @@ metadata:
   name: {{ include "runtime-node-core.fullname" . }}
   labels:
     {{- include "runtime-node-core.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
@@ -14,10 +18,13 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "runtime-node-core.selectorLabels" . | nindent 8 }}
+        {{- include "runtime-node-core.labels" . | nindent 8 }}
       annotations:
         {{- if .Values.secrets.create }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.commonAnnotations }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
       securityContext:

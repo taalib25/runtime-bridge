@@ -18,19 +18,26 @@ HermesCloud runs isolated AI coding workspaces for tenants. Each workspace is a 
 ```
 hermes-runtime-operator/
 ├── bridge/                  # Go bridge — the cluster agent
-│   ├── bridge.go            # Router, auth middleware, Bridge struct
-│   ├── helm.go              # buildValues(), normalizeInstanceSpec(), Helm install/upgrade/delete
-│   ├── admin_cluster.go     # GetClusterSummary (load metrics), GetClusterResources
+│   ├── bridge.go            # Router, auth middleware, Bridge struct, operation submit/supersede
+│   ├── helm.go              # buildValues(), normalizeInstanceSpec(), instanceSpecFromRelease(), install/upgrade/delete
+│   ├── operations.go        # OperationRunner — async op records (value-snapshot reads)
+│   ├── labels.go            # Label/annotation contract: validate, derive identity, imperative labels
+│   ├── admin_cluster.go     # GetClusterSummary, GetClusterResources, DrainCluster
 │   ├── bridge_config.go     # Config struct, env var overlays, defaults
-│   ├── types.go             # InstanceSpec, all request/response types
-│   ├── handlers_*.go        # HTTP handlers
-│   ├── lifecycle.go         # repair, waitForDeploymentReady
-│   ├── providers.go         # LLM provider config, soul write
+│   ├── types.go             # InstanceSpec, InstanceStatus, all request/response types
+│   ├── handlers_*.go        # HTTP handlers (instance, admin, config, agents, integrations)
+│   ├── lifecycle.go         # restart, redeploy, upgrade, rollback, repair, waitForDeploymentReady
+│   ├── status.go            # GetInstanceStatus, health check, phase derivation, pod selection
+│   ├── ingressroute.go      # Traefik IngressRoute + CORS/ForwardAuth middleware
+│   ├── integrations.go      # Messaging platform enable/disable
+│   ├── providers.go         # LLM provider config, soul write, instance Secret
+│   ├── sync.go              # Background metrics/alert loop
 │   └── exec.go              # WebSocket terminal
 ├── prod-hermes-docker-image/ # Runtime image (Dockerfile, extension JS/CSS)
 │   ├── Dockerfile            # python:3.12-slim, hermes-webui cloned at build
 │   └── extension/            # hermescloud.js + hermescloud.css (brand UX)
-├── charts/hermes-instance/   # Helm chart for pod deployment
+├── charts/runtime-node-core/ # Helm chart the bridge installs (active runtime)
+├── docs/                     # Specs — see docs/README.md (label-contract, instance-lifecycle, …)
 ├── deploy/                   # Bridge k8s manifests
 └── .github/workflows/
     ├── bridge.yml            # Tests + deploy hermes-test cluster
@@ -42,17 +49,36 @@ hermes-runtime-operator/
 ## Bridge API (all routes require X-Bridge-Secret header)
 
 ```
-POST   /v1/instances              create instance
+POST   /v1/instances/:id          create instance
 GET    /v1/instances              list all instances on this cluster
 GET    /v1/instances/:id          get instance status
 PUT    /v1/instances/:id          update instance spec
-DELETE /v1/instances/:id          delete instance + namespace
+DELETE /v1/instances/:id          delete instance (+ namespace; ?purge=false soft-deletes)
+
+# lifecycle ops — all async: return 202 + Operation, poll GET /v1/operations/:id
+POST   /v1/instances/:id/restart  rolling restart
+POST   /v1/instances/:id/redeploy re-run Helm upgrade from stored spec
+POST   /v1/instances/:id/upgrade  upgrade image/tag (auto-rollback on health fail)
+POST   /v1/instances/:id/rollback Helm rollback ({"version": N})
+POST   /v1/instances/:id/repair   bounded auto-recovery from pod state
+GET    /v1/instances/:id/operations  recent ops for this instance
+GET    /v1/operations/:id         operation status (running|succeeded|failed|superseded)
+
+# cluster
 GET    /v1/cluster/summary        cluster load + health (used for routing)
 GET    /v1/cluster/resources      per-node allocatable CPU/mem + pressure
+GET    /v1/cluster/maintenance    maintenance-mode state
+PUT    /v1/cluster/maintenance    set maintenance mode ({"enabled": bool}) — blocks new creates (503)
+POST   /v1/cluster/drain          maintenance + delete all instances ({"purge": bool})
+
+# diagnostics / proxied
 GET    /v1/instances/:id/diagnostics  pod logs, events, recommendation
 GET    /v1/instances/:id/profiles     hermes profile list (proxied)
 GET    /api/providers                 configured LLM providers (proxied)
 ```
+
+Operation model + delete-wins/supersede, repair table, maintenance/drain:
+see `docs/instance-lifecycle.md` in the repo (indexed by `docs/README.md`).
 
 ## InstanceSpec — key fields backend must send
 
@@ -74,9 +100,20 @@ GET    /api/providers                 configured LLM providers (proxied)
     "subdomain": "ws-<hex>",
     "host":      "hermeshq.net",
     "scheme":    "https"
+  },
+  "commonLabels": {
+    "hermescloud.dev/plan": "pro",
+    "hermescloud.dev/workspace-id": "wsp_..."
+  },
+  "commonAnnotations": {
+    "hermescloud.dev/display-name": "Ada's Workspace"
   }
 }
 ```
+
+`commonLabels`/`commonAnnotations` are **optional**, backend-owned business metadata
+under `hermescloud.dev/*` only — the bridge validates (422 on violation), applies them
+to every resource, and never invents or mutates them. See `docs/label-contract.md`.
 
 ## Cluster routing — how backend picks a cluster
 
@@ -123,11 +160,13 @@ Each environment holds: `NODE_IP`, `SSH_PRIVATE_KEY`, `BRIDGE_SECRET`, `GHCR_PAT
 
 ## Key conventions
 
-- Namespaces labelled `hermeshq/managed-by=bridge` — set by `ensureNamespace()` on every Helm op
-- Release name = instance ID (no prefix)
+- Namespaces labelled `hermeshq/managed-by=bridge` — set by `ensureNamespace()`; the operational anchor for drain + cluster summary
+- Release name = instance ID (no prefix); discovery selector = `app.kubernetes.io/instance=<releaseName>`
 - One namespace per instance, auto-created
 - Pod security: `allowPrivilegeEscalation: true`, `CAP_SETUID`, `CAP_SETGID`
 - Default tag `latest` → `imagePullPolicy: Always` (set automatically in `buildValues()`)
+- **Labels:** bridge owns identity (`app.kubernetes.io/*`) + operational anchors; backend owns `hermescloud.dev/*` business metadata. Control ops never key on backend labels. `app.kubernetes.io/managed-by` = `Helm` on chart resources, `hermes-bridge` on imperative ones. See `docs/label-contract.md`.
+- **Operations:** mutating ops are async (202 + `Operation`, poll `/v1/operations/:id`); one-in-flight per instance (409 on conflict). **Delete always wins** — it supersedes (cancels) any in-flight op, which then reports `superseded`. See `docs/instance-lifecycle.md`.
 
 ## Open TODOs (do not implement without explicit instruction)
 

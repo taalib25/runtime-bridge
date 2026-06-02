@@ -9,6 +9,176 @@ import (
 	"testing"
 )
 
+// ─── Label & annotation contract (docs/label-contract.md) ────────────────────
+
+func TestValidateBackendMetadata_AcceptsHermescloudPrefix(t *testing.T) {
+	spec := InstanceSpec{
+		CommonLabels: map[string]string{
+			"hermescloud.dev/plan":        "pro",
+			"hermescloud.dev/workspace-id": "wsp_987",
+		},
+		CommonAnnotations: map[string]string{
+			"hermescloud.dev/display-name": "Ada's Workspace (long, spaces, & punctuation ok)",
+		},
+	}
+	if err := validateBackendMetadata(spec); err != nil {
+		t.Fatalf("expected valid, got %v", err)
+	}
+}
+
+func TestValidateBackendMetadata_EmptyIsValid(t *testing.T) {
+	if err := validateBackendMetadata(InstanceSpec{}); err != nil {
+		t.Fatalf("empty maps must be valid, got %v", err)
+	}
+}
+
+func TestValidateBackendMetadata_RejectsReservedPrefixes(t *testing.T) {
+	for _, key := range []string{
+		"app.kubernetes.io/instance",
+		"app.kubernetes.io/name",
+		"helm.sh/chart",
+		"meta.helm.sh/release-name",
+		"kubernetes.io/foo",
+		"k8s.io/foo",
+		"hermeshq/managed-by",
+	} {
+		spec := InstanceSpec{CommonLabels: map[string]string{key: "x"}}
+		if err := validateBackendMetadata(spec); err == nil {
+			t.Errorf("expected reject for reserved key %q", key)
+		}
+	}
+}
+
+func TestValidateBackendMetadata_RejectsNonHermescloudKey(t *testing.T) {
+	spec := InstanceSpec{CommonLabels: map[string]string{"example.com/foo": "x"}}
+	if err := validateBackendMetadata(spec); err == nil {
+		t.Fatal("expected reject for non-hermescloud.dev key")
+	}
+}
+
+func TestValidateBackendMetadata_RejectsOversizeLabelValue(t *testing.T) {
+	spec := InstanceSpec{CommonLabels: map[string]string{
+		"hermescloud.dev/blob": strings.Repeat("a", 64), // >63 chars
+	}}
+	if err := validateBackendMetadata(spec); err == nil {
+		t.Fatal("expected reject for label value >63 chars")
+	}
+}
+
+func TestValidateBackendMetadata_AllowsOversizeAnnotationValue(t *testing.T) {
+	spec := InstanceSpec{CommonAnnotations: map[string]string{
+		"hermescloud.dev/notes": strings.Repeat("a", 500), // long is fine for annotations
+	}}
+	if err := validateBackendMetadata(spec); err != nil {
+		t.Fatalf("annotations may hold long values, got %v", err)
+	}
+}
+
+func TestBuildValues_CommonLabelsAndAnnotations(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{
+		InstanceID:        "ws-aabbccddeeff0011",
+		TenantID:          "t1",
+		Image:             "img",
+		CommonLabels:      map[string]string{"hermescloud.dev/plan": "pro"},
+		CommonAnnotations: map[string]string{"hermescloud.dev/display-name": "Ada"},
+	}
+	vals, err := b.buildValues(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, ok := vals["commonLabels"].(map[string]string)
+	if !ok || cl["hermescloud.dev/plan"] != "pro" {
+		t.Errorf("commonLabels not plumbed into values: %v", vals["commonLabels"])
+	}
+	ca, ok := vals["commonAnnotations"].(map[string]string)
+	if !ok || ca["hermescloud.dev/display-name"] != "Ada" {
+		t.Errorf("commonAnnotations not plumbed into values: %v", vals["commonAnnotations"])
+	}
+	// The dead hermes.ai/plan podLabel must no longer be emitted.
+	if _, exists := vals["podLabels"]; exists {
+		t.Errorf("podLabels should no longer be set (hermes.ai/plan removed)")
+	}
+}
+
+// Persistence round-trip: labels survive the values→release→spec cycle that
+// repair/redeploy/upgrade rely on. Without this, internal ops silently strip them.
+func TestInstanceSpecFromRelease_PreservesCommonMetadata(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{
+		InstanceID:        "ws-aabbccddeeff0011",
+		TenantID:          "t1",
+		Image:             "img",
+		CommonLabels:      map[string]string{"hermescloud.dev/plan": "pro"},
+		CommonAnnotations: map[string]string{"hermescloud.dev/display-name": "Ada"},
+	}
+	vals, err := b.buildValues(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the round-trip through Helm storage: marshal to JSON and back, so
+	// nested maps decode as map[string]any (exactly how a stored release deserializes).
+	raw, _ := json.Marshal(vals)
+	var stored map[string]any
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	got, err := instanceSpecFromRelease("ws-aabbccddeeff0011", stored, "ws-aabbccddeeff0011", "test-cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CommonLabels["hermescloud.dev/plan"] != "pro" {
+		t.Errorf("commonLabels lost in round-trip: %v", got.CommonLabels)
+	}
+	if got.CommonAnnotations["hermescloud.dev/display-name"] != "Ada" {
+		t.Errorf("commonAnnotations lost in round-trip: %v", got.CommonAnnotations)
+	}
+}
+
+func TestDeriveSelectorLabels_IdentityOnly(t *testing.T) {
+	sel := deriveSelectorLabels("ws-aabbccddeeff0011")
+	if sel["app.kubernetes.io/name"] != chartName {
+		t.Errorf("expected name=%s, got %q", chartName, sel["app.kubernetes.io/name"])
+	}
+	if sel["app.kubernetes.io/instance"] != "ws-aabbccddeeff0011" {
+		t.Errorf("expected instance=releaseName, got %q", sel["app.kubernetes.io/instance"])
+	}
+	if len(sel) != 2 {
+		t.Errorf("selectorLabels must be identity-only (2 keys), got %d: %v", len(sel), sel)
+	}
+}
+
+func TestInstanceLabels_ImperativeResourceSet(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{
+		InstanceID:   "ws-aabbccddeeff0011",
+		CommonLabels: map[string]string{"hermescloud.dev/plan": "pro"},
+	}
+	l := b.instanceLabels(spec)
+	if l["app.kubernetes.io/managed-by"] != "hermes-bridge" {
+		t.Errorf("imperative resources must be managed-by=hermes-bridge, got %q", l["app.kubernetes.io/managed-by"])
+	}
+	if l["app.kubernetes.io/instance"] != "ws-aabbccddeeff0011" {
+		t.Errorf("expected identity instance label, got %q", l["app.kubernetes.io/instance"])
+	}
+	if l["hermescloud.dev/plan"] != "pro" {
+		t.Errorf("commonLabels must be merged, got %v", l)
+	}
+}
+
+func TestHandleCreateInstance_RejectsBadLabelWith422(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	body := `{"tenantId":"t1","commonLabels":{"app.kubernetes.io/instance":"hijack"}}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/ws-1234567890abcdef", bytes.NewBufferString(body))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	req.Header.Set("Content-Type", "application/json")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for reserved-prefix label, got %d", rr.Code)
+	}
+}
+
 // ─── Pure-function helpers ────────────────────────────────────────────────────
 
 func TestBuildExtraSecretKeys_PassesAllKeys(t *testing.T) {
