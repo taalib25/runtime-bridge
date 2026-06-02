@@ -48,9 +48,11 @@ type Bridge struct {
 	Metrics        *Metrics
 
 	ready          atomic.Bool
+	maintenance    atomic.Bool // true → reject new instance creates; set via PUT /v1/cluster/maintenance
+	draining       atomic.Bool // true → drain in progress; prevents concurrent drains
 	runner         *OperationRunner
 	pendingCreates sync.Map // instanceID → pendingCreate; throttles duplicate creates
-	pendingOps     sync.Map // instanceID → *Operation; throttles duplicate async ops
+	pendingOps     sync.Map // instanceID → *inflightOp; throttles duplicate async ops, allows supersede
 	execTokens     sync.Map // token(string) → execToken; short-lived WebSocket auth tokens
 }
 
@@ -194,6 +196,9 @@ func (b *Bridge) Router() http.Handler {
 	// Admin / diagnostics — backend-only, never called by the frontend directly
 	v1.HandleFunc("/cluster/summary", b.handleGetClusterSummary).Methods(http.MethodGet)
 	v1.HandleFunc("/cluster/resources", b.handleGetClusterResources).Methods(http.MethodGet)
+	v1.HandleFunc("/cluster/maintenance", b.handleGetMaintenanceMode).Methods(http.MethodGet)
+	v1.HandleFunc("/cluster/maintenance", b.handleSetMaintenanceMode).Methods(http.MethodPut)
+	v1.HandleFunc("/cluster/drain", b.handleDrainCluster).Methods(http.MethodPost)
 	v1.HandleFunc("/instances/{id}/diagnostics", b.handleGetInstanceDiagnostics).Methods(http.MethodGet)
 	v1.HandleFunc("/instances/{id}/logs", b.handleGetInstanceLogs).Methods(http.MethodGet)
 	v1.HandleFunc("/instances/{id}/resources", b.handleGetInstanceResources).Methods(http.MethodGet)
@@ -291,14 +296,35 @@ func (b *Bridge) trackOperation(operation, result string, started time.Time) {
 	b.Metrics.OperationResults.WithLabelValues(b.ClusterName, operation, result).Inc()
 }
 
-func (b *Bridge) submitOperation(operationType, instanceID string, fn func(context.Context) error) *Operation {
+func (b *Bridge) submitOperation(operationType, instanceID string, fn func(context.Context) error) Operation {
 	return b.runner.Submit(operationType, instanceID, fn)
+}
+
+// inflightOp pairs a running Operation with the cancel func for its context, so
+// a delete can supersede (cancel) an in-progress restart/upgrade/repair.
+type inflightOp struct {
+	op     *Operation
+	cancel context.CancelFunc
+}
+
+// supersedeInFlight cancels any in-progress instance operation for instanceID and
+// marks its record as superseded. Used by delete, which must always win — a user
+// must be able to remove an instance even mid-upgrade. No-op if nothing is running.
+func (b *Bridge) supersedeInFlight(instanceID string) {
+	if v, ok := b.pendingOps.Load(instanceID); ok {
+		inf := v.(*inflightOp)
+		b.runner.Update(inf.op.ID, func(o *Operation) {
+			o.Message = fmt.Sprintf("%s superseded by delete", o.Type)
+		})
+		inf.cancel()
+	}
 }
 
 // submitInstanceOperation is like submitOperation but enforces one-in-flight per instance.
 // fn returns an optional success message (used verbatim if non-empty) and an error.
-// If an op is already running for instanceID, returns (nil, existingOp) — caller should 409.
-func (b *Bridge) submitInstanceOperation(operationType, instanceID string, fn func(context.Context) (string, error)) (*Operation, *Operation) {
+// The first return is a snapshot of the accepted op; if an op is already running for
+// instanceID it returns (zero, existingSnapshot) and the caller should 409.
+func (b *Bridge) submitInstanceOperation(operationType, instanceID string, fn func(context.Context) (string, error)) (Operation, *Operation) {
 	op := &Operation{
 		ID:         newOperationID(),
 		Type:       operationType,
@@ -308,26 +334,40 @@ func (b *Bridge) submitInstanceOperation(operationType, instanceID string, fn fu
 		StartedAt:  time.Now().UTC(),
 	}
 
-	actual, loaded := b.pendingOps.LoadOrStore(instanceID, op)
+	// Create the cancellable context up front so the stored inflightOp always has a
+	// valid cancel func — no window where a superseding delete reads a nil cancel.
+	ctx, cancel := context.WithTimeout(context.Background(), b.Config.OperationTimeout)
+	actual, loaded := b.pendingOps.LoadOrStore(instanceID, &inflightOp{op: op, cancel: cancel})
 	if loaded {
-		return nil, actual.(*Operation)
+		cancel() // discard the unused context for the rejected op
+		// Return a snapshot of the in-flight op, not the live pointer its goroutine mutates.
+		existing, _ := b.runner.Get(actual.(*inflightOp).op.ID)
+		return Operation{}, &existing
 	}
 
 	b.runner.Record(op)
+	// Snapshot before the goroutine launches so the returned value can be serialized
+	// without racing the in-place updates below. Callers poll Get for fresh state.
+	snapshot := *op
 
 	go func() {
 		defer b.pendingOps.Delete(instanceID)
-
-		ctx, cancel := context.WithTimeout(context.Background(), b.Config.OperationTimeout)
 		defer cancel()
 
 		msg, err := fn(ctx)
 		completedAt := time.Now().UTC()
 		if err != nil {
+			// A canceled context means a delete superseded this op — report it as
+			// superseded, not failed, so the user doesn't see a scary error for an
+			// instance they intentionally removed.
+			status, label := "failed", fmt.Sprintf("%s failed", operationType)
+			if ctx.Err() == context.Canceled {
+				status, label = "superseded", fmt.Sprintf("%s superseded by delete", operationType)
+			}
 			b.runner.Update(op.ID, func(existing *Operation) {
-				existing.Status = "failed"
+				existing.Status = status
 				existing.Error = err.Error()
-				existing.Message = fmt.Sprintf("%s failed", operationType)
+				existing.Message = label
 				existing.CompletedAt = &completedAt
 			})
 			return
@@ -344,7 +384,7 @@ func (b *Bridge) submitInstanceOperation(operationType, instanceID string, fn fu
 		})
 	}()
 
-	return op, nil
+	return snapshot, nil
 }
 
 func (b *Bridge) startOperationCleanup(ctx context.Context) {
@@ -365,7 +405,7 @@ func (b *Bridge) startOperationCleanup(ctx context.Context) {
 			// Evict stale pendingOps entries (guarded by goroutine defer, but
 			// clean up any that were abandoned without completing).
 			b.pendingOps.Range(func(k, v any) bool {
-				if op := v.(*Operation); op.CompletedAt != nil {
+				if inf := v.(*inflightOp); inf.op.CompletedAt != nil {
 					b.pendingOps.Delete(k)
 				}
 				return true

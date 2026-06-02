@@ -244,12 +244,225 @@ func TestHandleUpgradeInstance_DuplicateInFlight(t *testing.T) {
 		InstanceID: testWID,
 		Status:     "running",
 	}
-	b.pendingOps.Store(testWID, existingOp)
+	b.pendingOps.Store(testWID, &inflightOp{op: existingOp, cancel: func() {}})
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/instances/"+testWID+"/upgrade", bytes.NewBufferString(`{"image":"ghcr.io/taalib25/runtime-node-core","imageTag":"v0.2.0"}`))
 	req.Header.Set("X-Bridge-Secret", "secret")
 	req.Header.Set("Content-Type", "application/json")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rr.Code)
+	}
+}
+
+// --- Restart handler ---
+
+func TestHandleRestartInstance_ValidRequest(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/"+testWID+"/restart", nil)
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["type"] != "restart" {
+		t.Errorf("expected type=restart, got %v", body["type"])
+	}
+	if body["status"] != "running" {
+		t.Errorf("expected status=running, got %v", body["status"])
+	}
+}
+
+func TestHandleRestartInstance_DuplicateInFlight(t *testing.T) {
+	b := newTestBridge("secret")
+	existingOp := &Operation{
+		ID:         "existing-op-id",
+		Type:       "restart",
+		InstanceID: testWID,
+		Status:     "running",
+	}
+	b.pendingOps.Store(testWID, &inflightOp{op: existingOp, cancel: func() {}})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/"+testWID+"/restart", nil)
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rr.Code)
+	}
+}
+
+func TestHandleRestartInstance_InvalidInstanceID(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/INVALID!/restart", nil)
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+// Delete must win over an in-flight op: it cancels the running operation's context
+// (so the op short-circuits cleanly) rather than being blocked by the one-in-flight guard.
+func TestHandleDeleteInstance_SupersedesInFlightOp(t *testing.T) {
+	b := newTestBridge("secret")
+	canceled := make(chan struct{})
+	existingOp := &Operation{
+		ID:         "existing-op-id",
+		Type:       "upgrade",
+		InstanceID: testWID,
+		Status:     "running",
+	}
+	b.runner.Record(existingOp)
+	b.pendingOps.Store(testWID, &inflightOp{op: existingOp, cancel: func() { close(canceled) }})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/v1/instances/"+testWID+"?purge=false", nil)
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+
+	// Delete is accepted, not blocked with 409.
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+	// The in-flight op's context was canceled.
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("expected in-flight op to be canceled by delete")
+	}
+	// And its record is marked superseded.
+	if op, ok := b.runner.Get("existing-op-id"); ok {
+		if op.Message == "" || !strings.Contains(op.Message, "superseded") {
+			t.Errorf("expected superseded message, got %q", op.Message)
+		}
+	}
+}
+
+func TestHandleUpgradeInstance_InvalidInstanceID(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/INVALID!/upgrade", bytes.NewBufferString(`{"imageTag":"v0.2.0"}`))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	req.Header.Set("Content-Type", "application/json")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+// --- Maintenance mode handler ---
+
+func TestHandleGetMaintenanceMode_Default(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/cluster/maintenance", nil)
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["maintenance"] != false {
+		t.Errorf("expected maintenance=false by default, got %v", body["maintenance"])
+	}
+}
+
+func TestHandleSetMaintenanceMode_Enable(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/v1/cluster/maintenance", bytes.NewBufferString(`{"enabled":true}`))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if !b.maintenance.Load() {
+		t.Error("expected maintenance to be enabled")
+	}
+}
+
+func TestHandleSetMaintenanceMode_Disable(t *testing.T) {
+	b := newTestBridge("secret")
+	b.maintenance.Store(true)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/v1/cluster/maintenance", bytes.NewBufferString(`{"enabled":false}`))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	if b.maintenance.Load() {
+		t.Error("expected maintenance to be disabled")
+	}
+}
+
+func TestHandleSetMaintenanceMode_BadBody(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/v1/cluster/maintenance", bytes.NewBufferString("{invalid}"))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestHandleCreateInstance_BlockedByMaintenance(t *testing.T) {
+	b := newTestBridge("secret")
+	b.maintenance.Store(true)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/instances/"+testWID, bytes.NewBufferString(`{"tenantId":"t1"}`))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rr.Code)
+	}
+}
+
+// --- Drain handler ---
+
+func TestHandleDrainCluster_AcceptsRequest(t *testing.T) {
+	b := newTestBridge("secret")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/cluster/drain", bytes.NewBufferString(`{"purge":false}`))
+	req.Header.Set("X-Bridge-Secret", "secret")
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", rr.Code)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["type"] != "drain" {
+		t.Errorf("expected type=drain, got %v", body["type"])
+	}
+	if body["status"] != "running" {
+		t.Errorf("expected status=running, got %v", body["status"])
+	}
+	// Maintenance mode should be enabled synchronously before the 202 is returned.
+	if !b.maintenance.Load() {
+		t.Error("expected maintenance mode to be enabled after drain starts")
+	}
+}
+
+func TestHandleDrainCluster_ConflictWhenAlreadyDraining(t *testing.T) {
+	b := newTestBridge("secret")
+	b.draining.Store(true)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/cluster/drain", nil)
+	req.Header.Set("X-Bridge-Secret", "secret")
 	b.Router().ServeHTTP(rr, req)
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", rr.Code)

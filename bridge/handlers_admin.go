@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -93,6 +94,58 @@ func (b *Bridge) handleGetInstanceLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleGetMaintenanceMode GET /v1/cluster/maintenance
+func (b *Bridge) handleGetMaintenanceMode(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, MaintenanceModeResponse{
+		ClusterID:   b.ClusterName,
+		Maintenance: b.maintenance.Load(),
+		UpdatedAt:   time.Now().UTC(),
+	})
+}
+
+// handleSetMaintenanceMode PUT /v1/cluster/maintenance
+func (b *Bridge) handleSetMaintenanceMode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request body: %w", err))
+		return
+	}
+	b.maintenance.Store(req.Enabled)
+	b.Logger.Printf("[Maintenance] mode set to %v", req.Enabled)
+	writeJSON(w, http.StatusOK, MaintenanceModeResponse{
+		ClusterID:   b.ClusterName,
+		Maintenance: req.Enabled,
+		UpdatedAt:   time.Now().UTC(),
+	})
+}
+
+// handleDrainCluster POST /v1/cluster/drain
+func (b *Bridge) handleDrainCluster(w http.ResponseWriter, r *http.Request) {
+	if !b.draining.CompareAndSwap(false, true) {
+		writeError(w, http.StatusConflict, fmt.Errorf("drain already in progress"))
+		return
+	}
+
+	var req struct {
+		Purge bool `json:"purge"`
+	}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck — empty body defaults to purge=false
+	}
+
+	// Enable maintenance mode synchronously so the backend sees it immediately
+	// on the next cluster/summary poll, before any instance deletions begin.
+	b.maintenance.Store(true)
+
+	op := b.runner.Submit("drain", b.ClusterName, func(ctx context.Context) error {
+		defer b.draining.Store(false)
+		return b.DrainCluster(ctx, req.Purge)
+	})
+	writeJSON(w, http.StatusAccepted, op)
 }
 
 // handleGetInstanceResources GET /v1/instances/{id}/resources

@@ -21,6 +21,15 @@ type ClusterSummaryResponse struct {
 	Pods                PodCounts     `json:"pods"`
 	Resources           ClusterLoad   `json:"resources"`
 	LastSeenAt          time.Time     `json:"lastSeenAt"`
+	Maintenance         bool          `json:"maintenance"`
+	Draining            bool          `json:"draining"`
+}
+
+// MaintenanceModeResponse is the payload for GET/PUT /v1/cluster/maintenance.
+type MaintenanceModeResponse struct {
+	ClusterID   string    `json:"clusterId"`
+	Maintenance bool      `json:"maintenance"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 type PodCounts struct {
@@ -134,6 +143,8 @@ func (b *Bridge) GetClusterSummary(ctx context.Context) (ClusterSummaryResponse,
 	}
 	out.Pods = counts
 	out.Resources = load
+	out.Maintenance = b.maintenance.Load()
+	out.Draining = b.draining.Load()
 	return out, nil
 }
 
@@ -187,6 +198,49 @@ func (b *Bridge) GetClusterResources(ctx context.Context) (ClusterResourcesRespo
 		})
 	}
 	return out, nil
+}
+
+// DrainCluster enables maintenance mode then deletes every managed instance.
+// purge=true permanently destroys namespace + PVC data (same as DELETE with purge).
+// Returns a summary of deleted and failed instance IDs.
+func (b *Bridge) DrainCluster(ctx context.Context, purge bool) error {
+	b.maintenance.Store(true)
+
+	if b.KubeClient == nil {
+		return fmt.Errorf("kubernetes client not initialized")
+	}
+
+	nsList, err := b.KubeClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+		LabelSelector: managedByLabel,
+	})
+	if err != nil {
+		return fmt.Errorf("list managed namespaces: %w", err)
+	}
+
+	var failed []string
+	for _, ns := range nsList.Items {
+		instanceID := ns.Name
+		// Skip already-tombstoned namespaces unless purge=true.
+		// Tombstoned instances have hermes.io/deleted-at set; their Helm release is
+		// already gone and the namespace is kept intentionally for PVC/history.
+		// With purge=true we want to destroy them, so we fall through.
+		if !purge && ns.Annotations["hermes.io/deleted-at"] != "" {
+			b.Logger.Printf("[DrainCluster] Skipping tombstoned instance %s", instanceID)
+			continue
+		}
+		if err := b.DeleteInstance(ctx, instanceID, purge); err != nil {
+			b.Logger.Printf("[DrainCluster] Failed to delete instance %s: %v", instanceID, err)
+			failed = append(failed, instanceID)
+		} else {
+			b.Logger.Printf("[DrainCluster] Deleted instance %s", instanceID)
+		}
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("drain completed with %d failure(s): %v", len(failed), failed)
+	}
+	b.Logger.Printf("[DrainCluster] Drained %d instances (purge=%v)", len(nsList.Items), purge)
+	return nil
 }
 
 // isCrashLooping returns true if a pod is in CrashLoopBackOff or has restarted

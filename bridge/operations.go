@@ -25,9 +25,11 @@ func newOperationRunner(timeout time.Duration) *OperationRunner {
 	}
 }
 
-// Submit schedules fn in a goroutine, records the operation, and returns it immediately.
-// The caller receives a *Operation with Status="running" that is updated in-place.
-func (r *OperationRunner) Submit(operationType, instanceID string, fn func(context.Context) error) *Operation {
+// Submit schedules fn in a goroutine, records the operation, and returns a snapshot.
+// The returned value is a copy taken before the goroutine launches, so callers can
+// safely serialize it without racing the in-place updates the goroutine performs.
+// Callers poll Get for fresh state.
+func (r *OperationRunner) Submit(operationType, instanceID string, fn func(context.Context) error) Operation {
 	op := &Operation{
 		ID:         newOperationID(),
 		Type:       operationType,
@@ -38,6 +40,7 @@ func (r *OperationRunner) Submit(operationType, instanceID string, fn func(conte
 	}
 	r.mu.Lock()
 	r.operations[op.ID] = op
+	snapshot := *op
 	r.mu.Unlock()
 
 	go func() {
@@ -67,7 +70,7 @@ func (r *OperationRunner) Submit(operationType, instanceID string, fn func(conte
 		r.mu.Unlock()
 	}()
 
-	return op
+	return snapshot
 }
 
 // Record registers an externally-created operation in the runner's map.
@@ -87,24 +90,28 @@ func (r *OperationRunner) Update(id string, fn func(*Operation)) {
 	r.mu.Unlock()
 }
 
-// Get returns the operation with the given ID.
-func (r *OperationRunner) Get(id string) (*Operation, bool) {
+// Get returns a snapshot of the operation with the given ID. The copy is taken
+// under the lock so callers never read fields a worker goroutine is mutating.
+func (r *OperationRunner) Get(id string) (Operation, bool) {
 	r.mu.RLock()
+	defer r.mu.RUnlock()
 	op, ok := r.operations[id]
-	r.mu.RUnlock()
-	return op, ok
+	if !ok {
+		return Operation{}, false
+	}
+	return *op, true
 }
 
-// ListForInstance returns all operations for the given instanceID (unordered).
-func (r *OperationRunner) ListForInstance(instanceID string) []*Operation {
+// ListForInstance returns snapshots of all operations for the given instanceID (unordered).
+func (r *OperationRunner) ListForInstance(instanceID string) []Operation {
 	r.mu.RLock()
-	var ops []*Operation
+	defer r.mu.RUnlock()
+	var ops []Operation
 	for _, op := range r.operations {
 		if op.InstanceID == instanceID {
-			ops = append(ops, op)
+			ops = append(ops, *op)
 		}
 	}
-	r.mu.RUnlock()
 	return ops
 }
 

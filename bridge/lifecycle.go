@@ -136,8 +136,18 @@ func (b *Bridge) UpgradeInstance(ctx context.Context, instanceID, image, imageTa
 	releaseName := b.releaseName(instanceID)
 
 	rollback := func(reason error) error {
+		// If the operation was canceled (a delete superseded it), the release is
+		// being removed — rolling back would race the uninstall. Bail cleanly.
+		if ctx.Err() == context.Canceled {
+			return fmt.Errorf("upgrade superseded by delete")
+		}
+		// Roll back under a fresh context: the operation deadline may already be
+		// drained by the failed upgrade, which would make the rollback's health
+		// wait fail instantly and falsely report "rollback also failed".
+		rbCtx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		defer cancel()
 		b.Logger.Printf("[UpgradeInstance] %s unhealthy after upgrade, rolling back to revision %d: %v", instanceID, previousRevision, reason)
-		if rbErr := b.RollbackInstance(ctx, instanceID, previousRevision); rbErr != nil {
+		if rbErr := b.RollbackInstance(rbCtx, instanceID, previousRevision); rbErr != nil {
 			return fmt.Errorf("upgrade failed: %v; rollback also failed: %w", reason, rbErr)
 		}
 		return fmt.Errorf("upgrade failed: %v — rolled back to revision %d", reason, previousRevision)

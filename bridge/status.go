@@ -317,14 +317,26 @@ func selectDeployment(items []appsv1.Deployment, releaseName string) *appsv1.Dep
 	return nil
 }
 
+// selectPod picks the most representative pod for status reporting. During a
+// rolling update there are briefly two pods (old terminating + new starting);
+// prefer the newest Running pod so status reflects the incoming revision rather
+// than the doomed one. Falls back to the newest pod of any phase.
 func selectPod(items []corev1.Pod) *corev1.Pod {
+	var running *corev1.Pod
+	var newest *corev1.Pod
 	for i := range items {
-		if items[i].Status.Phase == corev1.PodRunning {
-			return &items[i]
+		p := &items[i]
+		if newest == nil || p.CreationTimestamp.After(newest.CreationTimestamp.Time) {
+			newest = p
+		}
+		if p.Status.Phase == corev1.PodRunning {
+			if running == nil || p.CreationTimestamp.After(running.CreationTimestamp.Time) {
+				running = p
+			}
 		}
 	}
-	if len(items) > 0 {
-		return &items[0]
+	if running != nil {
+		return running
 	}
-	return nil
+	return newest
 }

@@ -162,6 +162,11 @@ func (b *Bridge) deleteHelmIngress(ctx context.Context, namespace string) {
 func (b *Bridge) DeleteInstance(ctx context.Context, instanceID string, purge bool) error {
 	started := time.Now()
 
+	if b.KubeClient == nil {
+		b.trackOperation("delete", "failure", started)
+		return fmt.Errorf("kubernetes client not initialized")
+	}
+
 	// Write tombstone before uninstalling so the record survives even if
 	// the uninstall itself fails. Idempotent — safe for QStash retries.
 	b.writeTombstone(ctx, instanceID)

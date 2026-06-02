@@ -31,6 +31,10 @@ func (b *Bridge) handleListInstances(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
+	if b.maintenance.Load() {
+		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("cluster is in maintenance mode — new instances are not accepted"))
+		return
+	}
 	instanceID := mux.Vars(r)["id"]
 	spec, err := b.decodeInstanceRequest(r, instanceID)
 	if err != nil {
@@ -154,6 +158,9 @@ func (b *Bridge) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	// Purge is the default — delete removes everything (namespace, PVC, all data).
 	// Pass ?purge=false to do a soft delete (Helm uninstall only, keeps PVC).
 	purge := r.URL.Query().Get("purge") != "false"
+	// Delete always wins: cancel any in-flight restart/upgrade/repair so it short-
+	// circuits cleanly instead of rolling back into a release we're about to remove.
+	b.supersedeInFlight(instanceID)
 	op := b.submitOperation("delete", instanceID, func(ctx context.Context) error {
 		return b.DeleteInstance(ctx, instanceID, purge)
 	})
