@@ -19,10 +19,27 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 )
 
-var wsUpgrader = websocket.Upgrader{
-	HandshakeTimeout: 10 * time.Second,
-	// Auth is already enforced by the shared-secret middleware before reaching here.
-	CheckOrigin: func(r *http.Request) bool { return true },
+// wsUpgrader returns a WebSocket upgrader that validates the request Origin against
+// the bridge's configured CORS allowlist. An empty Origin (curl, mobile, programmatic
+// clients) is always allowed — browsers always send Origin on cross-origin requests,
+// so absence of the header cannot be a browser cross-origin attempt.
+func (b *Bridge) wsUpgrader() websocket.Upgrader {
+	allowed := parseCORSOrigins(b.Config.DefaultCORSOrigins)
+	return websocket.Upgrader{
+		HandshakeTimeout: 10 * time.Second,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			for _, a := range allowed {
+				if strings.EqualFold(origin, a) {
+					return true
+				}
+			}
+			return false
+		},
+	}
 }
 
 // execMsg is the client→server envelope sent as JSON text frames.
@@ -69,7 +86,8 @@ func (b *Bridge) handleExec(w http.ResponseWriter, r *http.Request) {
 		container = pod.Spec.Containers[0].Name
 	}
 
-	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	upgrader := b.wsUpgrader()
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		b.Logger.Printf("[exec] WebSocket upgrade failed for %s: %v", instanceID, err)
 		return

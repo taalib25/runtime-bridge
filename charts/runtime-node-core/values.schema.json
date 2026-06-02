@@ -46,6 +46,22 @@
     "commonAnnotations": {
       "type": "object",
       "additionalProperties": { "type": "string" }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled":          { "type": "boolean" },
+        "traefikNamespace": { "type": "string" },
+        "bridgeNamespace":  { "type": "string" },
+        "clusterCIDR":      { "type": "string" },
+        "serviceCIDR":      { "type": "string" }
+      }
+    },
+    "resourceQuota": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
     }
   }
 }
