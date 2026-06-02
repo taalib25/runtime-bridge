@@ -21,6 +21,9 @@ on:
       ADMIN_API_SECRET:
         required: true
 
+env:
+  IMAGE: ghcr.io/taalib25/hermes-bridge
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -38,50 +41,87 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.NODE_IP }} >> ~/.ssh/known_hosts
 
+      # ── Private registry auth ────────────────────────────────────────────
+      # Write k3s registries.yaml once so containerd pulls from ghcr.io
+      # automatically — no imagePullSecrets in manifests, no SSH pipe.
+      - name: Configure k3s private registry (ghcr.io)
+        run: |
+          ssh root@${{ secrets.NODE_IP }} bash << 'ENDSSH'
+            mkdir -p /etc/rancher/k3s
+            cat > /etc/rancher/k3s/registries.yaml << EOF
+          configs:
+            "ghcr.io":
+              auth:
+                username: taalib25
+                password: ${{ secrets.GHCR_PAT }}
+          EOF
+            # Restart k3s only when the file actually changed
+            if ! cmp -s /etc/rancher/k3s/registries.yaml.prev /etc/rancher/k3s/registries.yaml 2>/dev/null; then
+              cp /etc/rancher/k3s/registries.yaml /etc/rancher/k3s/registries.yaml.prev
+              systemctl restart k3s
+              sleep 10
+            fi
+          ENDSSH
+
+      # ── Build & push bridge image to private GHCR ────────────────────────
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build bridge image
-        run: |
-          docker build \
-            --build-arg GIT_SHA=${{ steps.tag.outputs.sha }} \
-            -t hermes-bridge:${{ steps.tag.outputs.sha }} \
-            .
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: taalib25
+          password: ${{ secrets.GHCR_PAT }}
 
-      - name: Load image into k3s
-        run: |
-          docker save hermes-bridge:${{ steps.tag.outputs.sha }} | \
-            ssh root@${{ secrets.NODE_IP }} "k3s ctr images import -"
+      - name: Build and push bridge image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.sha }}
+            ${{ env.IMAGE }}:latest
+          build-args: GIT_SHA=${{ steps.tag.outputs.sha }}
+          # Layer cache — cuts build time by ~60% on repeated runs
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
 
-      - name: Pull runtime image on node
+      # ── Enable maintenance mode before touching anything ─────────────────
+      # Prevents new creates racing a mid-deploy bridge restart.
+      - name: Enable maintenance mode
         run: |
-          ssh root@${{ secrets.NODE_IP }} \
-            "k3s ctr images pull \
-              --user taalib25:${{ secrets.GHCR_PAT }} \
-              ghcr.io/taalib25/runtime-node-core:latest"
+          SECRET="${{ secrets.BRIDGE_SECRET }}"
+          ssh root@${{ secrets.NODE_IP }} "
+            curl -sf -X PUT http://localhost:8080/v1/cluster/maintenance \
+              -H 'X-Bridge-Secret: $SECRET' \
+              -H 'Content-Type: application/json' \
+              -d '{\"enabled\": true}' || true
+          "
 
-      - name: Render and apply manifests
+      # ── Apply manifests ───────────────────────────────────────────────────
+      - name: Apply manifests
         env:
           CLUSTER_NAME: ${{ inputs.cluster_name }}
           GIT_SHA: ${{ steps.tag.outputs.sha }}
           BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
         run: |
+          # Render deployment with correct cluster name + image tag
           sed \
-            -e "s|hermes-bridge:__GIT_SHA__|hermes-bridge:${GIT_SHA}|g" \
+            -e "s|ghcr.io/taalib25/hermes-bridge:__GIT_SHA__|${IMAGE}:${GIT_SHA}|g" \
             -e "s|value: \"hermes-test\"|value: \"${CLUSTER_NAME}\"|g" \
             deploy/deployment-test.yaml > /tmp/deployment.yaml
 
-          scp deploy/rbac.yaml root@${{ secrets.NODE_IP }}:/tmp/rbac.yaml
-          scp deploy/service.yaml root@${{ secrets.NODE_IP }}:/tmp/service.yaml
-          scp /tmp/deployment.yaml root@${{ secrets.NODE_IP }}:/tmp/deployment.yaml
+          scp deploy/rbac.yaml deploy/service.yaml /tmp/deployment.yaml \
+            root@${{ secrets.NODE_IP }}:/tmp/
 
           ssh root@${{ secrets.NODE_IP }} "
-            KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-            # Ensure bridge-auth secret exists with this cluster's secret
             kubectl create namespace hermes-bridge --dry-run=client -o yaml | kubectl apply -f -
+
             kubectl -n hermes-bridge create secret generic bridge-auth \
               --from-literal=secret=${BRIDGE_SECRET} \
               --dry-run=client -o yaml | kubectl apply -f -
@@ -91,44 +131,60 @@ jobs:
             kubectl apply -f /tmp/deployment.yaml
           "
 
-      - name: Restart and wait for rollout
+      # ── Rollout — k3s pulls the image from GHCR automatically ────────────
+      - name: Rollout and wait
         run: |
           ssh root@${{ secrets.NODE_IP }} "
-            KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
             kubectl rollout restart deployment/hermes-bridge -n hermes-bridge
             kubectl rollout status deployment/hermes-bridge -n hermes-bridge --timeout=120s
           "
 
+      # ── Disable maintenance mode (always runs, even on failure) ──────────
+      - name: Disable maintenance mode
+        if: always()
+        run: |
+          SECRET="${{ secrets.BRIDGE_SECRET }}"
+          ssh root@${{ secrets.NODE_IP }} "
+            curl -sf -X PUT http://localhost:8080/v1/cluster/maintenance \
+              -H 'X-Bridge-Secret: $SECRET' \
+              -H 'Content-Type: application/json' \
+              -d '{\"enabled\": false}' || true
+          " || true
+
+      # ── Smoke test ────────────────────────────────────────────────────────
       - name: Smoke test
         run: |
-          ssh root@${{ secrets.NODE_IP }} bash << 'EOF'
-            SECRET=$(KUBECONFIG=/etc/rancher/k3s/k3s.yaml \
-              kubectl -n hermes-bridge get secret bridge-auth \
+          ssh root@${{ secrets.NODE_IP }} bash << 'ENDSSH'
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            SECRET=$(kubectl -n hermes-bridge get secret bridge-auth \
               -o jsonpath='{.data.secret}' | base64 -d)
 
             curl -sf -H "X-Bridge-Secret: $SECRET" \
               http://localhost:8080/healthz | grep '"status":"ok"'
             curl -sf -H "X-Bridge-Secret: $SECRET" \
               http://localhost:8080/readyz | grep '"status":"ready"'
+            curl -sf -H "X-Bridge-Secret: $SECRET" \
+              http://localhost:8080/v1/cluster/summary | grep '"kubernetesReachable":true'
 
-            echo "Smoke test passed for cluster: $CLUSTER_NAME"
-          EOF
-        env:
-          CLUSTER_NAME: ${{ inputs.cluster_name }}
+            echo "Smoke test passed"
+          ENDSSH
 
+      # ── Prune old images ──────────────────────────────────────────────────
       - name: Prune old images
         run: |
           ssh root@${{ secrets.NODE_IP }} /usr/local/bin/hermescloud-cleanup || true
 
+      # ── Register cluster with backend ─────────────────────────────────────
       - name: Register cluster with backend
         run: |
           curl -sf -X POST https://api.hermeshq.net/api/admin/clusters \
             -H "Authorization: Bearer ${{ secrets.ADMIN_API_SECRET }}" \
             -H "Content-Type: application/json" \
             -d '{
-              "cluster_id": "${{ inputs.cluster_name }}",
-              "bridge_url": "http://${{ secrets.NODE_IP }}:8080",
+              "cluster_id":    "${{ inputs.cluster_name }}",
+              "bridge_url":    "http://${{ secrets.NODE_IP }}:8080",
               "bridge_secret": "${{ secrets.BRIDGE_SECRET }}",
-              "region": "${{ inputs.region }}",
-              "status": "active"
+              "region":        "${{ inputs.region }}",
+              "status":        "active"
             }'

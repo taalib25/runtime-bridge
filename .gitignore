@@ -32,3 +32,7 @@ kubeconfig*
 
 # Compiled bridge binary
 bridge/bridge
+
+# Agent/Claude skill directories (local tooling, not part of the project)
+.agents/
+.claude/skills/

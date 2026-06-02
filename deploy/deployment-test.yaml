@@ -24,8 +24,8 @@ spec:
       serviceAccountName: hermes-bridge
       containers:
         - name: bridge
-          image: hermes-bridge:__GIT_SHA__
-          imagePullPolicy: Never
+          image: ghcr.io/taalib25/hermes-bridge:__GIT_SHA__
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080
