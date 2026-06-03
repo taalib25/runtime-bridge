@@ -33,6 +33,9 @@ kubeconfig*
 # Compiled bridge binary
 bridge/bridge
 
-# Agent/Claude skill directories (local tooling, not part of the project)
+# Agent/Claude skill directories (local tooling, not part of the project).
+# Ignore all skills EXCEPT hetzner-k3s, which is a committed project artifact
+# (its scripts manage real cluster infrastructure).
 .agents/
-.claude/skills/
+.claude/skills/*
+!.claude/skills/hetzner-k3s
