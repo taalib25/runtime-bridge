@@ -57,33 +57,43 @@ hetzner-k3s run --config cluster-config-test.yaml --script ./scripts/fix-ssh.sh
 hetzner-k3s releases
 ```
 
-## Common workflows
+## Helper scripts (`scripts/`)
+
+These wrap the `hetzner-k3s` CLI with HermesCloud-specific glue and guardrails
+(typed confirmation, conflict checks, `DRY_RUN`). **Prefer these over raw CLI calls**
+for anything that touches infrastructure.
+
+| Script | Wraps | What it adds |
+|---|---|---|
+| `provision-cluster.sh <config> <name> <region>` | `create` | End-to-end: create cluster → discover IP → GitHub Environment + 5 secrets → registries.yaml → build/push bridge → deploy → smoke test → register with backend. Refuses if cluster/env already exists. `DRY_RUN=true` to preview. |
+| `create-cluster.sh <config>` | `create` | Idempotent create/reconcile of an **existing** cluster only |
+| `scale-pool.sh <config> <pool> <count>` | `create` | Edits `instance_count`, reconciles; for scale-down, walks you through drain+delete first |
+| `upgrade-cluster.sh <config> <version>` | `upgrade`+`create` | Enforces the mandatory two-step, monitors System Upgrade Controller, prints stall recovery |
+| `run-on-cluster.sh <config> --command/--script` | `run` | Confirmation prompt when the command looks destructive |
+| `destroy-cluster.sh <config>` | `delete` | Checks `protect_against_deletion`, typed confirm, drains bridge from backend, offers to delete the GitHub Environment |
+| `health-check.sh <vm-ip>` | — | Read-only node + pod health |
+| `cleanup-images.sh` | — | Prune old images on a node |
+
+**New cluster, one command** (see `provision-cluster.sh` header for required env vars):
+```bash
+export HCLOUD_TOKEN=... GHCR_PAT=... ADMIN_API_SECRET=... SSH_PRIVATE_KEY="$(cat ~/.ssh/id_ed25519)"
+DRY_RUN=true ./scripts/provision-cluster.sh cluster-config-eu2.yaml hermes-eu-2 eu  # preview
+./scripts/provision-cluster.sh cluster-config-eu2.yaml hermes-eu-2 eu              # do it
+```
+
+## Raw CLI workflows (when not using scripts)
 
 ### Add / scale a worker pool
-1. Edit `worker_node_pools` in the config (add new pool or increase `instance_count`)
-2. `hetzner-k3s create --config cluster-config.yaml` — idempotent, only provisions the delta
-
-### Scale down a pool
-1. Reduce `instance_count` in config
-2. Drain + delete extra nodes: `kubectl drain <node> --ignore-daemonsets --delete-emptydir-data && kubectl delete node <node>`
-3. Delete the instance in Hetzner Console (Cloud Controller Manager may do this automatically)
-4. `hetzner-k3s create --config cluster-config.yaml` to reconcile
+Edit `instance_count` in the pool → `hetzner-k3s create --config <file>` (idempotent).
+Or use `scripts/scale-pool.sh`.
 
 ### Replace a broken node
-1. `kubectl drain <node> && kubectl delete node <node>`
-2. Delete the VM from Hetzner Console
-3. `hetzner-k3s create --config cluster-config.yaml` — recreates the missing node
+`kubectl drain <node> && kubectl delete node <node>` → delete the VM in Hetzner Console
+→ `hetzner-k3s create --config <file>` recreates it.
 
 ### Convert single-master to HA
-1. Increase `masters_pool.instance_count` to 3 and add locations (fsn1/hel1/nbg1)
-2. `hetzner-k3s create --config cluster-config.yaml`
-
-### Deploy bridge to a new cluster
-1. `kubectl create namespace hermes-bridge`
-2. `kubectl create secret generic bridge-auth --namespace hermes-bridge --from-literal=secret=$(openssl rand -hex 32)`
-3. `kubectl apply -f deploy/` (RBAC + service + deployment)
-4. Add DNS A record in Cloudflare pointing `bridge-<name>.hermeshq.net` → node/LB IP
-5. Register cluster in backend: `POST /api/admin/clusters`
+Increase `masters_pool.instance_count` to 3, add locations (fsn1/hel1/nbg1),
+`hetzner-k3s create`.
 
 ## Key constraints
 
