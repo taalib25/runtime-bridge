@@ -359,10 +359,21 @@ type GatewayStatus struct {
 	Output     string `json:"output,omitempty"`
 }
 
+// Error codes for 503 responses — backend should switch on Code, not Error string.
+const (
+	ErrCodeClusterMaintenance    = "CLUSTER_MAINTENANCE"
+	ErrCodeClusterAtCapacity     = "CLUSTER_AT_CAPACITY"
+	ErrCodeNodePressure          = "NODE_PRESSURE"
+	ErrCodeKubernetesUnreachable = "KUBERNETES_UNREACHABLE"
+)
+
 type ErrorResponse struct {
 	Error       string `json:"error"`
 	Details     string `json:"details,omitempty"`
 	OperationID string `json:"operationId,omitempty"`
+	// Code is a stable machine-readable identifier for 503 errors so the backend
+	// can decide whether to re-route (capacity/maintenance) or retry (transient).
+	Code string `json:"code,omitempty"`
 }
 
 // ─── Provider config types ────────────────────────────────────────────────────

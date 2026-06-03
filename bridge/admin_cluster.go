@@ -23,6 +23,11 @@ type ClusterSummaryResponse struct {
 	LastSeenAt          time.Time     `json:"lastSeenAt"`
 	Maintenance         bool          `json:"maintenance"`
 	Draining            bool          `json:"draining"`
+	// HeadroomMiB is the estimated free memory available for new instances:
+	// allocatable - systemOverhead - reserved. Negative means the cluster is
+	// over-committed. Backend should exclude clusters where HeadroomMiB < 1024
+	// (one instance memory request) from routing.
+	HeadroomMiB         int64         `json:"headroomMiB"`
 }
 
 // MaintenanceModeResponse is the payload for GET/PUT /v1/cluster/maintenance.
@@ -145,6 +150,24 @@ func (b *Bridge) GetClusterSummary(ctx context.Context) (ClusterSummaryResponse,
 	out.Resources = load
 	out.Maintenance = b.maintenance.Load()
 	out.Draining = b.draining.Load()
+
+	// Compute headroom: sum allocatable memory across ready nodes, subtract
+	// systemOverheadMiB and the reserved request total.
+	if allNodes, nodeErr := b.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{}); nodeErr == nil {
+		nodes = allNodes
+		var allocatableMiB int64
+		for _, node := range nodes.Items {
+			for _, c := range node.Status.Conditions {
+				if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
+					if q, ok := node.Status.Allocatable[corev1.ResourceMemory]; ok {
+						allocatableMiB += q.Value() / (1024 * 1024)
+					}
+				}
+			}
+		}
+		out.HeadroomMiB = allocatableMiB - systemOverheadMiB - out.Resources.ReservedMemoryMiB
+	}
+
 	return out, nil
 }
 
