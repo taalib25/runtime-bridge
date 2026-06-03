@@ -453,51 +453,141 @@ func (b *Bridge) CheckReadiness(ctx context.Context) error {
 	return nil
 }
 
-// checkClusterCapacity returns an error if the cluster has no nodes able to
-// accept new workloads — all nodes are cordoned, not Ready, or under pressure.
+// capacityCheckResult carries both the error and a stable code for the handler
+// to emit as a machine-readable field in the 503 response body.
+type capacityCheckResult struct {
+	code string
+	err  error
+}
+
+func (r *capacityCheckResult) Error() string { return r.err.Error() }
+
+// systemOverheadMiB is the memory reserved for k3s system pods, Traefik, the
+// bridge, and the CSI driver on a shared node. Subtract this from allocatable
+// before computing headroom. Conservative estimate for a cpx22 (4 GiB RAM).
+const systemOverheadMiB = 768
+
+// checkClusterCapacity returns a capacityCheckResult (implements error) when the
+// cluster cannot safely accept one more instance. It checks in order:
+//  1. Kubernetes reachability
+//  2. Node liveness + active pressure conditions
+//  3. Actual memory headroom (reserved + incoming request ≤ allocatable - overhead)
+//
+// The result carries a Code the create handler writes into the 503 body so the
+// backend can re-route without string-matching the human-readable message.
 func (b *Bridge) checkClusterCapacity(ctx context.Context) error {
 	nodes, err := b.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("check cluster capacity: %w", err)
+		return &capacityCheckResult{
+			code: ErrCodeKubernetesUnreachable,
+			err:  fmt.Errorf("kubernetes unreachable: %w", err),
+		}
 	}
 	if len(nodes.Items) == 0 {
-		return fmt.Errorf("cluster at capacity: no nodes registered")
+		return &capacityCheckResult{
+			code: ErrCodeKubernetesUnreachable,
+			err:  fmt.Errorf("cluster has no registered nodes"),
+		}
 	}
 
-	var issues []string
+	var pressureIssues []string
+	var allocatableMiB int64
 	schedulable := 0
+
 	for _, node := range nodes.Items {
 		if node.Spec.Unschedulable {
 			continue
 		}
 		ready := false
+		hasPressure := false
 		for _, c := range node.Status.Conditions {
+			if c.Status != corev1.ConditionTrue {
+				if c.Type == corev1.NodeReady {
+					continue // not ready
+				}
+				continue
+			}
 			switch c.Type {
 			case corev1.NodeReady:
-				if c.Status == corev1.ConditionTrue {
-					ready = true
-				}
+				ready = true
 			case corev1.NodeMemoryPressure:
-				if c.Status == corev1.ConditionTrue {
-					issues = append(issues, fmt.Sprintf("node %s: memory pressure", node.Name))
-				}
+				hasPressure = true
+				pressureIssues = append(pressureIssues, fmt.Sprintf("node %s: MemoryPressure", node.Name))
 			case corev1.NodeDiskPressure:
-				if c.Status == corev1.ConditionTrue {
-					issues = append(issues, fmt.Sprintf("node %s: disk pressure", node.Name))
-				}
+				hasPressure = true
+				pressureIssues = append(pressureIssues, fmt.Sprintf("node %s: DiskPressure", node.Name))
+			case corev1.NodePIDPressure:
+				hasPressure = true
+				pressureIssues = append(pressureIssues, fmt.Sprintf("node %s: PIDPressure", node.Name))
 			}
 		}
-		if ready {
+		if ready && !hasPressure {
 			schedulable++
+			if q, ok := node.Status.Allocatable[corev1.ResourceMemory]; ok {
+				allocatableMiB += q.Value() / (1024 * 1024)
+			}
 		}
 	}
 
-	if schedulable == 0 {
-		if len(issues) > 0 {
-			return fmt.Errorf("cluster at capacity: %s", strings.Join(issues, "; "))
+	if len(pressureIssues) > 0 && schedulable == 0 {
+		return &capacityCheckResult{
+			code: ErrCodeNodePressure,
+			err:  fmt.Errorf("no schedulable nodes: %s", strings.Join(pressureIssues, "; ")),
 		}
-		return fmt.Errorf("cluster at capacity: no ready nodes available")
 	}
+	if schedulable == 0 {
+		return &capacityCheckResult{
+			code: ErrCodeClusterAtCapacity,
+			err:  fmt.Errorf("no ready schedulable nodes available"),
+		}
+	}
+
+	// Headroom check: compare actual reserved memory against what the node can
+	// safely give to instances (allocatable minus overhead for system pods).
+	// instanceMemoryRequestMiB matches the chart default (requests.memory: 1Gi).
+	// If the bridge config ever exposes a configurable default, use that instead.
+	const instanceMemoryRequestMiB = 1024
+	safeCapacityMiB := allocatableMiB - systemOverheadMiB
+
+	// Sum reserved memory across all currently managed pods.
+	allPods, err := b.KubeClient.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err == nil {
+		nsList, nsErr := b.KubeClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
+			LabelSelector: managedByLabel,
+		})
+		if nsErr == nil {
+			managed := make(map[string]bool, len(nsList.Items))
+			for _, ns := range nsList.Items {
+				managed[ns.Name] = true
+			}
+			var reservedMiB int64
+			for i := range allPods.Items {
+				if !managed[allPods.Items[i].Namespace] {
+					continue
+				}
+				for _, c := range allPods.Items[i].Spec.Containers {
+					if mem := c.Resources.Requests.Memory(); mem != nil {
+						reservedMiB += mem.Value() / (1024 * 1024)
+					}
+				}
+			}
+			if reservedMiB+instanceMemoryRequestMiB > safeCapacityMiB {
+				return &capacityCheckResult{
+					code: ErrCodeClusterAtCapacity,
+					err: fmt.Errorf(
+						"insufficient headroom: need %d MiB, have %d MiB free (reserved %d / safe capacity %d)",
+						instanceMemoryRequestMiB,
+						safeCapacityMiB-reservedMiB,
+						reservedMiB,
+						safeCapacityMiB,
+					),
+				}
+			}
+		}
+	}
+	// If the headroom query failed, we fall through and allow the create — better
+	// to attempt and let Kubernetes schedule than to falsely reject.
+
 	return nil
 }
 
@@ -598,6 +688,12 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, ErrorResponse{Error: err.Error()})
+}
+
+// writeErrorCode writes a 503-class error with a stable machine-readable Code field
+// so the backend can switch on Code rather than string-matching the Error message.
+func writeErrorCode(w http.ResponseWriter, status int, code string, err error) {
+	writeJSON(w, status, ErrorResponse{Error: err.Error(), Code: code})
 }
 
 func deploymentConditions(conditions []metav1.Condition) []string {

@@ -126,18 +126,54 @@ admin and fix the payload. (Distinct from `400` malformed-body and `503` capacit
 
 ---
 
-## 5. [ACTION] Respect maintenance / draining in routing
+## 5. [ACTION] Capacity-aware routing + machine-readable 503 codes
 
-`GET /v1/cluster/summary` now includes `"maintenance": bool` and `"draining": bool`.
+`GET /v1/cluster/summary` now includes:
+- `"maintenance": bool` — exclude from routing when true
+- `"draining": bool` — exclude from routing when true
+- `"headroomMiB": int` — estimated free memory for new instances (`allocatable − overhead − reserved`). **Exclude clusters where `headroomMiB < 1024`** (one instance's memory request) from `pickCluster()`.
 
-- **Exclude** clusters from `pickCluster()` when `maintenance` or `draining` is true (in
-  addition to the existing `kubernetesReachable` / `crashLooping` / pressure filters).
-- A cluster can flip to maintenance between routing and create → `POST /v1/instances/:id`
-  returns **503**. On 503, re-route to another cluster rather than failing the request.
-- Mirror bridge state into the `clusters.status` column (`active` | `draining` | `offline`)
-  so the admin dashboard and routing agree.
-- Expose admin controls that proxy to the bridge: `GET`/`PUT /v1/cluster/maintenance`
-  (`{enabled}`) and `POST /v1/cluster/drain` (`{purge}`).
+All 503 responses from `POST /v1/instances/:id` now carry a machine-readable `code` field. **Switch on `code`, not the `error` string** — the error string is human-readable and may change:
+
+```ts
+const REROUTE_CODES = new Set([
+  "CLUSTER_MAINTENANCE",
+  "CLUSTER_AT_CAPACITY",
+  "NODE_PRESSURE",
+  "KUBERNETES_UNREACHABLE",
+])
+
+if (res.status === 503) {
+  const { code } = await res.json()
+  if (REROUTE_CODES.has(code)) {
+    await markClusterDegraded(cluster.cluster_id, 60) // 60s cooldown in KV
+    continue // try next cluster
+  }
+  throw new Error(`bridge 503: ${code}`)
+}
+```
+
+**Optimistic cache update on successful create:** after a 202, immediately increment
+`reservedMemoryMiB += 1024` and `instanceCount += 1` in the CF KV cluster-stats entry
+without waiting for the next poll. Prevents overcommit under burst traffic where the 60s
+cache TTL would otherwise route 5 concurrent creates to a cluster that fits 2.
+
+`pickCluster()` exclusion filter (complete list):
+```ts
+.filter(({ stats }) =>
+  stats?.kubernetesReachable &&
+  stats?.pods.crashLooping === 0 &&
+  !stats?.maintenance &&
+  !stats?.draining &&
+  (stats?.headroomMiB ?? 0) >= 1024  // room for one more instance
+)
+```
+
+Mirror bridge state into `clusters.status` column (`active` | `draining` | `offline`)
+so the admin dashboard and routing agree.
+
+Expose admin controls that proxy to the bridge: `GET`/`PUT /v1/cluster/maintenance`
+(`{enabled}`) and `POST /v1/cluster/drain` (`{purge}`).
 
 ---
 
@@ -178,7 +214,9 @@ those panels go blank.
 - [ ] Handle `422` without blind-retry; surface the offending key
 - [ ] Fix status mapping to lowercase `phase` + `healthy` bool
 - [ ] Poll `GET /v1/operations/:id` for update/delete/lifecycle ops; handle `superseded` + `409`
-- [ ] Exclude `maintenance`/`draining` clusters in routing; re-route on `503`
+- [ ] Exclude `maintenance`/`draining`/`headroomMiB < 1024` clusters from `pickCluster()`
+- [ ] Switch 503 handling on `code` field (`CLUSTER_MAINTENANCE` / `CLUSTER_AT_CAPACITY` / `NODE_PRESSURE` / `KUBERNETES_UNREACHABLE`) — not error string
+- [ ] Optimistic KV cache update on successful create (`reservedMemoryMiB += 1024`, `instanceCount += 1`)
 - [ ] Expose admin proxies: restart/redeploy/upgrade/rollback/repair + maintenance + drain
 - [ ] Confirm delete `?purge` usage; expect async + supersede
 - [ ] Resend `API_SERVER_KEY` on every PUT

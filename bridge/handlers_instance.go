@@ -32,7 +32,8 @@ func (b *Bridge) handleListInstances(w http.ResponseWriter, r *http.Request) {
 
 func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	if b.maintenance.Load() {
-		writeError(w, http.StatusServiceUnavailable, fmt.Errorf("cluster is in maintenance mode — new instances are not accepted"))
+		writeErrorCode(w, http.StatusServiceUnavailable, ErrCodeClusterMaintenance,
+			fmt.Errorf("cluster is in maintenance mode — new instances are not accepted"))
 		return
 	}
 	instanceID := mux.Vars(r)["id"]
@@ -66,7 +67,11 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 
 	if err := b.checkClusterCapacity(r.Context()); err != nil {
 		b.Logger.Printf("[CreateInstance] Capacity check failed for %s: %v", instanceID, err)
-		writeError(w, http.StatusServiceUnavailable, err)
+		code := ErrCodeClusterAtCapacity
+		if cr, ok := err.(*capacityCheckResult); ok {
+			code = cr.code
+		}
+		writeErrorCode(w, http.StatusServiceUnavailable, code, err)
 		return
 	}
 
