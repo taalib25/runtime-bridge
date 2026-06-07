@@ -49,9 +49,14 @@ metadata:
   name: {{ include "hermes-agent.fullname" . }}
   labels:
     {{- include "hermes-agent.labels" . | nindent 4 }}
-  {{- with .Values.deploymentAnnotations }}
+  {{- if or .Values.commonAnnotations .Values.deploymentAnnotations }}
   annotations:
+    {{- with .Values.commonAnnotations }}
     {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.deploymentAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
@@ -78,6 +83,9 @@ spec:
         checksum/external-secret: {{ include (print $.Template.BasePath "/external-secret.yaml") . | sha256sum }}
         {{- else if not .Values.secrets.existingSecret }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.commonAnnotations }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}

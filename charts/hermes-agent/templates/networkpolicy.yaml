@@ -34,6 +34,10 @@ metadata:
   name: {{ include "hermes-agent.fullname" . }}
   labels:
     {{- include "hermes-agent.labels" . | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   podSelector:
     matchLabels:
