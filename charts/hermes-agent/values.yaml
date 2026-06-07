@@ -1,9 +1,25 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# Backend-owned business metadata (hermescloud.dev/*), injected by the bridge.
+# commonLabels merge into every resource via the hermes-agent.labels helper;
+# commonAnnotations are emitted on every resource's metadata.annotations (deployment,
+# pod template, service, ingress, pvc, configmap, networkpolicy, serviceaccount, quota/
+# limitrange). See docs/label-contract.md.
+commonLabels: {}
+commonAnnotations: {}
+
+# ResourceQuota + LimitRange — hard-cap the per-tenant namespace to 1 pod and 2 PVCs,
+# bounded by the resources block below. Prevents a compromised instance from spawning
+# additional workloads (templates/quota.yaml).
+resourceQuota:
+  enabled: true
+
 image:
   repository: nousresearch/hermes-agent
-  tag: "0.8.0"
+  # Official upstream tag. The bridge overrides this per-instance; pin a CalVer + digest
+  # (e.g. v2026.6.5) for reproducibility once smoke-tested. There is no 0.8.0 published.
+  tag: "latest"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -75,6 +91,16 @@ soul:
   text: ""
 
 env:
+  # s6 stage2 remaps the in-image `hermes` user to these before dropping privileges;
+  # HERMES_GID MUST equal podSecurityContext.fsGroup so the dropped process can write the PVC.
+  HERMES_UID: "1000"
+  HERMES_GID: "1000"
+  # Tenant dev-tool persistence. s6 sets subprocess HOME=/opt/data/home (on the PVC), so
+  # cargo (~/.cargo), go (~/go), pip --user (~/.local), gem (~/.gem), pnpm, yarn, git/ssh/gh
+  # all persist across restarts with NO extra config. The only gap is `npm install -g`
+  # (npm's prefix defaults to /usr/local, ephemeral) — point it at /opt/data/.local so global
+  # bins land in /opt/data/.local/bin (on the image PATH) → persist AND resolve.
+  NPM_CONFIG_PREFIX: "/opt/data/.local"
   WEB_TOOLS_DEBUG: "false"
   VISION_TOOLS_DEBUG: "false"
   MOA_TOOLS_DEBUG: "false"
@@ -222,7 +248,10 @@ persistence:
   existingClaim: ""
   mountPath: /opt/data
   accessMode: ReadWriteOnce
-  size: 5Gi
+  # /opt/data holds config + sessions + memories + lightrag + npm-global (MCP) +
+  # playwright cache, all of which grow under load. 5Gi (upstream default) wedges
+  # an active agent; 20Gi is the per-tenant baseline (override per plan tier).
+  size: 20Gi
   storageClass: ""
   annotations: {}
 
@@ -302,13 +331,46 @@ virtualService:
   timeout: "3600s"
   servicePortNumber: null
 
+# NetworkPolicy — the REAL per-tenant isolation boundary. terminal.backend=local runs
+# an adversarial LLM in-pod, so this must be on by default. Ported from the
+# runtime-node-core chart + hardened per docs/hermes-runtime-migration-plan.md Phase 3c.
+# The fork's networkpolicy.yaml renders networkPolicy.ingress/egress verbatim.
 networkPolicy:
-  enabled: false
+  enabled: true
   policyTypes:
     - Ingress
     - Egress
-  ingress: []
-  egress: []
+  # Ingress: Traefik (external HTTP/WS) and the bridge (health checks, exec proxy).
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system     # Traefik runs here on k3s
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: hermes-bridge    # bridge ClusterIP probes/proxy
+  # Egress: DNS + internet (OpenRouter/Anthropic/etc). Cluster-internal CIDRs are excluded
+  # to block pod-to-pod lateral movement; 169.254.0.0/16 blocks the cloud metadata endpoint
+  # (169.254.169.254) so a compromised agent can't steal node credentials (SSRF).
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.42.0.0/16          # k3s flannel pod CIDR
+              - 10.43.0.0/16          # k3s service CIDR
+              - 169.254.0.0/16        # link-local incl. cloud metadata 169.254.169.254
+              # - <node-private-subnet>  # add here if a Hetzner private network is ever used
 
 tenantIsolation:
   enabled: false
@@ -332,9 +394,24 @@ pdb:
 #     httpGet:
 #       path: /health
 #       port: api-server
+# Default probes: TCP on the dashboard port (9119), which `hermes dashboard` binds.
+# Robust without knowing the HTTP health path. Generous delays cover the first-boot web-UI
+# build/seed + lazy adapter/MCP installs. Override per docs/hermes-runtime-migration-plan.md.
 probes:
-  liveness: {}
-  readiness: {}
+  readiness:
+    tcpSocket:
+      port: 9119
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 12
+  liveness:
+    tcpSocket:
+      port: 9119
+    initialDelaySeconds: 120
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 6
   startup: {}
 
 npmPackages: []
@@ -353,21 +430,27 @@ podAnnotations: {}
 deploymentAnnotations: {}
 podLabels: {}
 
+# The official nousresearch/hermes-agent image runs s6-overlay (ENTRYPOINT /init). Its
+# preinit + privilege drop (s6-setuidgid) require a REAL root start: runAsUser:0,
+# runAsNonRoot:false, allowPrivilegeEscalation:true (no_new_privs breaks the drop),
+# readOnlyRootFilesystem:false (s6 writes /run; agent installs lazy deps/playwright/npm),
+# and capabilities not fully dropped. s6 then drops each service to the `hermes` user
+# (remapped to env.HERMES_UID/GID == fsGroup). Strict isolation comes from the per-tenant
+# namespace + NetworkPolicy + ResourceQuota, NOT pod-level runAsNonRoot.
 podSecurityContext:
-  runAsUser: 10000
-  runAsGroup: 10000
-  fsGroup: 10000
+  runAsUser: 0
+  runAsNonRoot: false
+  fsGroup: 1000
   fsGroupChangePolicy: OnRootMismatch
-  runAsNonRoot: true
   seccompProfile:
     type: RuntimeDefault
 
 securityContext:
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: true
+  readOnlyRootFilesystem: false
+  runAsNonRoot: false
   capabilities:
-    drop:
-      - ALL
+    drop: []
   seccompProfile:
     type: RuntimeDefault
 
