@@ -332,7 +332,7 @@ func TestBuildValues_SecretsExistingSecret(t *testing.T) {
 	}
 }
 
-func TestBuildValues_ExtraSecretKeys(t *testing.T) {
+func TestBuildValues_SecretsViaExistingSecret(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-aabbccddeeff0011",
@@ -344,19 +344,18 @@ func TestBuildValues_ExtraSecretKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extra, ok := vals["extraSecretKeys"].(map[string]string)
-	if !ok {
-		t.Fatal("extraSecretKeys is not a map[string]string")
+	// The hermes-agent chart injects the whole instance Secret via envFrom: secretRef,
+	// so the bridge no longer emits extraSecretKeys; it points at the existing Secret.
+	if _, ok := vals["extraSecretKeys"]; ok {
+		t.Errorf("extraSecretKeys must not be set for the hermes-agent chart")
 	}
-	if extra["GOOGLE_API_KEY"] != "GOOGLE_API_KEY" {
-		t.Errorf("expected GOOGLE_API_KEY in extraSecretKeys, got %v", extra)
-	}
-	if extra["DISCORD_BOT_TOKEN"] != "DISCORD_BOT_TOKEN" {
-		t.Errorf("expected DISCORD_BOT_TOKEN in extraSecretKeys, got %v", extra)
+	secrets, ok := vals["secrets"].(map[string]any)
+	if !ok || secrets["existingSecret"] == "" {
+		t.Errorf("expected secrets.existingSecret to be set, got %v", vals["secrets"])
 	}
 }
 
-func TestBuildValues_ExtraEnv(t *testing.T) {
+func TestBuildValues_Env(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-aabbccddeeff0011",
@@ -368,12 +367,35 @@ func TestBuildValues_ExtraEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extraEnv, ok := vals["extraEnv"].(map[string]string)
+	// Custom env now goes into the chart's `env` MAP (not the list-typed `extraEnv`).
+	env, ok := vals["env"].(map[string]string)
 	if !ok {
-		t.Fatal("extraEnv is not a map[string]string")
+		t.Fatal("env is not a map[string]string")
 	}
-	if extraEnv["MY_CUSTOM_VAR"] != "hello" {
-		t.Errorf("expected MY_CUSTOM_VAR in extraEnv, got %v", extraEnv)
+	if env["MY_CUSTOM_VAR"] != "hello" {
+		t.Errorf("expected MY_CUSTOM_VAR in env, got %v", env)
+	}
+	if _, ok := vals["extraEnv"]; ok {
+		t.Errorf("extraEnv (list-typed in the chart) must not be set as a map")
+	}
+	// The dashboard basic-auth username is the backend tenant identity (spec.TenantID),
+	// so the tenant logs in with the ID the backend knows them by. HOME/NPM_CONFIG_PREFIX
+	// are chart-owned, so they appear at render time, not in this bridge-built env map.
+	if env["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"] != "t1" {
+		t.Errorf("expected dashboard username = TenantID (t1), got %v", env["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"])
+	}
+}
+
+func TestBuildValues_DashboardUserFromTenantID(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{InstanceID: "ws-aabbccddeeff0011", TenantID: "acme-user-42", Image: "img"}
+	vals, err := b.buildValues(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := vals["env"].(map[string]string)
+	if env["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"] != "acme-user-42" {
+		t.Errorf("dashboard username should equal TenantID, got %q", env["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"])
 	}
 }
 

@@ -125,6 +125,7 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 	}
 
 	if hasCORS || hasAuth {
+		// The main host routes to the dashboard (spec.RuntimePort = 9119).
 		host := spec.Network.host()
 		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth, b.instanceLabels(spec), b.instanceAnnotations(spec)); err != nil {
 			b.Logger.Printf("[CreateInstance] Warning: failed to create IngressRoute: %v", err)
@@ -192,9 +193,6 @@ func (b *Bridge) DeleteInstance(ctx context.Context, instanceID string, purge bo
 	// Best-effort: remove Traefik routing resources.
 	if mwErr := b.DeleteIngressRoute(ctx, instanceID); mwErr != nil {
 		b.Logger.Printf("[DeleteInstance] Warning: failed to delete IngressRoute: %v", mwErr)
-	}
-	if mwErr := b.DeleteDashboardIngressRoute(ctx, instanceID); mwErr != nil {
-		b.Logger.Printf("[DeleteInstance] Warning: failed to delete dashboard IngressRoute: %v", mwErr)
 	}
 	if mwErr := b.DeleteForwardAuthMiddleware(ctx, instanceID); mwErr != nil {
 		b.Logger.Printf("[DeleteInstance] Warning: failed to delete ForwardAuth middleware: %v", mwErr)
@@ -348,6 +346,17 @@ func (b *Bridge) ListInstances(ctx context.Context) ([]InstanceStatus, error) {
 
 func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 	spec = b.normalizeInstanceSpec(spec)
+	// The tenant surface is the Hermes web dashboard (s6 service on port 9119, enabled by
+	// HERMES_DASHBOARD=1) — our access path to the agent, routed on the main host.
+	const dashboardPort = 9119
+	// The OpenAI-compatible API server (`gateway run` serves it when apiServer.enabled).
+	// The dashboard reaches the gateway over localhost:8642, and in-cluster callers via the
+	// Service. API_SERVER_KEY (instance Secret) satisfies the non-loopback fail-closed gate.
+	const apiServerPort = 8642
+	// The in-image `hermes` user is remapped to this UID/GID by s6 stage2 before the
+	// privilege drop; it MUST equal podSecurityContext.fsGroup so the dropped process can
+	// write the PVC at /opt/data.
+	const fsGroupGID = 1000
 	repository, splitTag := splitImageReference(spec.Image)
 	// ImageTag from spec takes precedence; fall back to the tag embedded in the image
 	// reference, then to the normalizeInstanceSpec default ("latest").
@@ -385,14 +394,10 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"config": map[string]any{
 			"values": hermesConfigToMap(spec.HermesConfig),
 		},
-		// extraEnv is the chart's flat map of extra env vars (platform flags, workspace
-		// identity, messaging allowlists, etc.) rendered alongside runtime.env defaults.
-		// extraEnvList is for structured {name,value} env pairs from spec.Env (unused by
-		// runtime-node-core chart but preserved for forward compatibility).
-		"env":             spec.EnvMap,
-		"extraEnv":        spec.EnvMap,
-		"extraEnvList":    envValues(spec.Env),
-		"extraSecretKeys": buildExtraSecretKeys(spec.Secrets),
+		// `env` is the chart's flat MAP of non-secret env vars (finalised near the end of
+		// buildValues). We deliberately do NOT set the chart's `extraEnv` (it is a LIST —
+		// a map there renders invalid YAML) or `extraSecretKeys` (no such mechanism in this
+		// chart; all secret keys arrive via envFrom: secretRef on the instance Secret).
 		"secrets": map[string]any{
 			"create":         false,
 			"existingSecret": b.instanceSecretName(spec.InstanceID),
@@ -404,15 +409,22 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"persistence": map[string]any{
 			"enabled": true,
 		},
+		// Two listeners: the dashboard (9119, routed on the main host as the tenant surface)
+		// and the OpenAI-compatible API server (8642, reachable in-pod via localhost and
+		// in-cluster via the Service). The main ingress points at the dashboard (RuntimePort).
 		"service": map[string]any{
 			"enabled": true,
-			"ports": []any{map[string]any{
-				"name": "api-server", "port": spec.RuntimePort, "targetPort": spec.RuntimePort, "protocol": "TCP",
-			}},
+			"ports": []any{
+				map[string]any{"name": "dashboard", "port": dashboardPort, "targetPort": dashboardPort, "protocol": "TCP"},
+				map[string]any{"name": "api-server", "port": apiServerPort, "targetPort": apiServerPort, "protocol": "TCP"},
+			},
 		},
+		// Enable the gateway's API server (s6 `gateway run` serves it). host 0.0.0.0 so the
+		// Service can reach it; API_SERVER_KEY (instance Secret) satisfies the fail-closed gate.
 		"apiServer": map[string]any{
 			"enabled":     true,
-			"port":        spec.RuntimePort,
+			"host":        "0.0.0.0",
+			"port":        apiServerPort,
 			"corsOrigins": spec.CORSOrigins,
 		},
 		"ingress": map[string]any{
@@ -512,89 +524,63 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		}
 	}
 
-	// runtime-node-core: clear chart's default hermes-agent args, set UID 1024,
-	// mount PVC root as HERMES_HOME so bootstrap writes config.yaml to the right place.
+	// Leave the image's /init (s6-overlay) ENTRYPOINT intact. The CMD is the heartbeat
+	// `gateway run`; s6 supervises it AND the dashboard service (gated by HERMES_DASHBOARD
+	// below), per Nous Research's docker docs. Do NOT override command/args beyond this.
 	values["command"] = []any{}
-	values["args"] = []any{}
+	values["args"] = []any{"gateway", "run"}
 
+	// The image runs s6-overlay, whose preinit + privilege-drop (s6-setuidgid) require a
+	// REAL root start: runAsUser:0 + allowPrivilegeEscalation:true + capabilities not fully
+	// dropped + readOnlyRootFilesystem:false. s6 then drops each service to the `hermes`
+	// user (remapped to HERMES_UID/GID below, == fsGroup). Isolation is the per-tenant
+	// namespace + NetworkPolicy + ResourceQuota, not pod-level runAsNonRoot.
 	values["podSecurityContext"] = map[string]any{
-		"runAsNonRoot":        true,
-		"runAsUser":           int64(1024),
-		"runAsGroup":          int64(1024),
-		"fsGroup":             int64(1024),
+		"runAsUser":           int64(0),
+		"runAsNonRoot":        false,
+		"fsGroup":             int64(fsGroupGID),
 		"fsGroupChangePolicy": "OnRootMismatch",
+		"seccompProfile":      map[string]any{"type": "RuntimeDefault"},
 	}
 	values["securityContext"] = map[string]any{
 		"allowPrivilegeEscalation": true,
 		"readOnlyRootFilesystem":   false,
-		"capabilities": map[string]any{
-			"drop": []any{"ALL"},
-			"add":  []any{"SETUID", "SETGID"},
-		},
+		"runAsNonRoot":             false,
+		"capabilities":             map[string]any{"drop": []any{}},
+		"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
 	}
 
-	// PVC root = HERMES_HOME so the bootstrap-config init container writes
-	// config.yaml directly to /home/hermeswebui/.hermes/config.yaml on the PVC.
-	values["persistence"].(map[string]any)["mountPath"] = "/home/hermeswebui/.hermes"
+	// HERMES_HOME = /opt/data (baked into the image); s6 stage2 seeds it.
 
-	// /workspace is a subPath so both dirs share one PVC claim.
-	values["extraVolumeMounts"] = []any{
-		map[string]any{"name": "data", "mountPath": "/workspace", "subPath": "workspace"},
+	if spec.EnvMap == nil {
+		spec.EnvMap = map[string]string{}
 	}
-
-	// Create the workspace subdir before the subPath mount binds.
-	values["extraInitContainers"] = []any{
-		map[string]any{
-			"name":    "init-dirs",
-			"image":   "busybox:1.36",
-			"command": []any{"sh", "-c", "mkdir -p /mnt/workspace /mnt/webui /mnt/bin /mnt/cache/pip /mnt/cache/npm /mnt/python /mnt/npm /mnt/pnpm"},
-			"volumeMounts": []any{map[string]any{
-				"name": "data", "mountPath": "/mnt",
-			}},
-		},
+	// Non-secret runtime env (Nous docker docs):
+	//   HERMES_DASHBOARD=1                    → bring up the supervised dashboard s6 service
+	//                                           (binds 0.0.0.0:9119 by default).
+	//   HERMES_DASHBOARD_BASIC_AUTH_USERNAME  → the `basic` dashboard_auth provider registers
+	//                                           from this + _PASSWORD/_SECRET (instance Secret),
+	//                                           satisfying the auth gate on the non-loopback bind.
+	//   HERMES_UID/GID=1000                   → s6 stage2 remaps the in-image `hermes` user to
+	//                                           these before s6-setuidgid drops to it; == fsGroup
+	//                                           so the dropped process can write the PVC.
+	// Tool persistence is native: s6 sets subprocess HOME=/opt/data/home (on the PVC), so
+	// cargo/go/pip --user/gem/etc. persist. The chart adds NPM_CONFIG_PREFIX for `npm -g`.
+	//
+	// The dashboard basic-auth username is the backend-supplied tenant identity (spec.TenantID),
+	// so the tenant logs in with the same ID the backend knows them by. The backend may override
+	// it by sending HERMES_DASHBOARD_BASIC_AUTH_USERNAME in the spec env.
+	dashboardUser := spec.TenantID
+	if dashboardUser == "" {
+		dashboardUser = "tenant" // defensive fallback; TenantID is required + validated on create
 	}
-
-	// HOME overrides the chart's "$mountPath/home" default.
-	// HERMES_WEBUI_AGENT_DIR points to the agent baked into the image, not the PVC.
-	h := "/home/hermeswebui/.hermes"
-	rncEnv := map[string]string{
-		"HERMES_WEBUI_HOST":              "0.0.0.0",
-		"HERMES_WEBUI_PORT":              strconv.Itoa(spec.RuntimePort),
-		"HERMES_WEBUI_STATE_DIR":         h + "/webui",
-		"HERMES_WEBUI_DEFAULT_WORKSPACE": "/workspace",
-		"HERMES_WEBUI_AGENT_DIR":         "/opt/hermes-agent",
-		"HOME":                           "/home/hermeswebui",
-		"HERMES_HOME":                    h,
-		"HERMES_SKIP_SETUP":              "1",
-		"HERMES_EXEC_ASK":                "false",
-		"PATH":            h + "/bin:/home/hermeswebui/.local/bin:/opt/hermes-webui/.venv/bin:/usr/local/bin:/usr/bin:/bin",
-		"GH_CONFIG_DIR":   h + "/gh",
-		"XDG_CONFIG_HOME": h + "/.config",
-		"PYTHONUSERBASE":  h + "/python",
-		"PIP_CACHE_DIR":   h + "/cache/pip",
-		"PIPX_HOME":       h + "/pipx",
-		"PIPX_BIN_DIR":    h + "/bin",
-		"UV_CACHE_DIR":    h + "/cache/uv",
-		"UV_TOOL_DIR":     h + "/uv/tools",
-		"UV_TOOL_BIN_DIR": h + "/bin",
-		"NPM_CONFIG_PREFIX": h + "/npm",
-		"NPM_CONFIG_CACHE":  h + "/cache/npm",
-		"PNPM_HOME":         h + "/pnpm",
-		"YARN_GLOBAL_FOLDER": h + "/yarn/global",
-		"YARN_CACHE_FOLDER":  h + "/cache/yarn",
-		"COREPACK_HOME":      h + "/corepack",
-		"BUN_INSTALL":        h + "/bun",
-		"DENO_INSTALL":       h + "/deno",
-		"CARGO_HOME":         h + "/cargo",
-		"RUSTUP_HOME":        h + "/rustup",
-		"GOPATH":             h + "/go",
-		"GOBIN":              h + "/bin",
-		"GEM_HOME":           h + "/gem",
-		"GEM_PATH":           h + "/gem",
-		"COMPOSER_HOME":      h + "/composer",
-		"DOTNET_CLI_HOME":    h + "/dotnet",
+	hermesEnv := map[string]string{
+		"HERMES_DASHBOARD":                     "1",
+		"HERMES_DASHBOARD_BASIC_AUTH_USERNAME": dashboardUser,
+		"HERMES_UID":                           strconv.Itoa(fsGroupGID),
+		"HERMES_GID":                           strconv.Itoa(fsGroupGID),
 	}
-	for k, v := range rncEnv {
+	for k, v := range hermesEnv {
 		if _, exists := spec.EnvMap[k]; !exists {
 			spec.EnvMap[k] = v
 		}
@@ -658,7 +644,8 @@ func instanceSpecFromRelease(defaultInstanceID string, values map[string]any, na
 		spec.Namespace = namespace
 	}
 	if spec.RuntimePort == 0 {
-		spec.RuntimePort = 8787
+		// Hermes web dashboard port — the routed tenant surface (`hermes dashboard`).
+		spec.RuntimePort = 9119
 	}
 	// Restore secret key names from extraSecretKeys so any UpdateInstance caller
 	// preserves existing secretKeyRef entries without explicit secretKeysFromRelease calls.
@@ -748,14 +735,6 @@ func splitImageReference(image string) (string, string) {
 	return image, ""
 }
 
-func envValues(values []EnvVar) []map[string]any {
-	result := make([]map[string]any, 0, len(values))
-	for _, item := range values {
-		result = append(result, map[string]any{"name": item.Name, "value": item.Value})
-	}
-	return result
-}
-
 func instanceString(values map[string]any, key, fallback string) string {
 	if raw, ok := values[key]; ok {
 		if str, ok := raw.(string); ok && strings.TrimSpace(str) != "" {
@@ -814,7 +793,8 @@ func (b *Bridge) normalizeInstanceSpec(spec InstanceSpec) InstanceSpec {
 		}
 	}
 	if spec.RuntimePort == 0 {
-		spec.RuntimePort = 8787
+		// Hermes web dashboard port — the routed tenant surface (`hermes dashboard`).
+		spec.RuntimePort = 9119
 	}
 	// Default namespace to the workspace ID (one namespace per tenant).
 	if spec.Namespace == "" {

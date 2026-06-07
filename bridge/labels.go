@@ -18,9 +18,10 @@ const (
 	// commonLabels / commonAnnotations. Everything else is rejected.
 	backendLabelPrefix = "hermescloud.dev/"
 
-	// chartName is the fixed app.kubernetes.io/name for every instance — the
-	// only runtime the bridge supports.
-	chartName = "runtime-node-core"
+	// chartName is the fixed app.kubernetes.io/name for every instance — it MUST match
+	// the Helm chart's Chart.Name (charts/hermes-agent) so the bridge's derived selector
+	// labels equal the chart-rendered pod selector.
+	chartName = "hermes-agent"
 
 	// namespaceManagedByLabel is the bridge's own operational anchor on instance
 	// namespaces. Control operations (drain, cluster summary) select on it. It is
