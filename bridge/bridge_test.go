@@ -120,7 +120,7 @@ func TestDecodeInstanceRequest_ImageOptional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("image should be optional, got error: %v", err)
 	}
-	if spec.Image != "ghcr.io/taalib25/runtime-node-core" {
+	if spec.Image != "nousresearch/hermes-agent" {
 		t.Errorf("expected defaulted image, got %q", spec.Image)
 	}
 }

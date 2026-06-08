@@ -42,6 +42,19 @@ app.kubernetes.io/part-of: hermes-agent
 {{- if $tenantLabels }}
 {{ $tenantLabels }}
 {{- end }}
+{{- with .Values.commonLabels }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{- /*
+Backend-owned business metadata (hermescloud.dev/*) injected by the bridge.
+Merged onto every resource via metadata.annotations. See docs/label-contract.md.
+*/ -}}
+{{- define "hermes-agent.commonAnnotations" -}}
+{{- with .Values.commonAnnotations }}
+{{ toYaml . }}
+{{- end }}
 {{- end -}}
 
 {{- define "hermes-agent.selectorLabels" -}}

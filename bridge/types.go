@@ -61,13 +61,14 @@ type InstanceSpec struct {
 	// (see docs/label-contract.md); this field is kept for the PLAN env var / metrics.
 	// Not validated by the bridge.
 	Plan string `json:"plan,omitempty"`
-	// RuntimeMode must be "runtime-node-core" or empty (treated as "runtime-node-core").
-	// Any other value is rejected with a 400. The bridge only supports the prebuilt
-	// runtime-node-core image (ghcr.io/taalib25/runtime-node-core) which bundles
-	// hermes-webui + hermes-agent and runs as hermeswebui (UID 1024).
+	// RuntimeMode selects the per-instance engine. Empty or the legacy token
+	// "runtime-node-core" are accepted; any other value is rejected with a 400.
+	// The runtime is the NousResearch Hermes Agent (nousresearch/hermes-agent): an s6-overlay
+	// image that runs `gateway run` + the dashboard s6 service (HERMES_DASHBOARD=1) as root,
+	// HERMES_HOME=/opt/data.
 	RuntimeMode string `json:"runtimeMode,omitempty"`
-	// RuntimePort is the container port the runtime listens on.
-	// Defaults to 8787 (runtime-node-core listens on 8787).
+	// RuntimePort is the container port the routed tenant surface listens on.
+	// Defaults to 9119 — the Hermes web dashboard, served on the main instance host.
 	RuntimePort int `json:"runtimePort,omitempty"`
 }
 

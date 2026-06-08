@@ -56,10 +56,17 @@ func DefaultConfig() Config {
 		ShutdownTimeout:         10 * time.Second,
 		HTTPClientTimeout:       5 * time.Second,
 		OperationTimeout:        10 * time.Minute,
-		HealthPath:              "/health",
+		// The Hermes dashboard's public (no-auth) liveness endpoint. It's in the dashboard's
+		// PUBLIC_API_PATHS allowlist, so the bridge health probe gets 200 even though the rest
+		// of the dashboard is behind basic-auth. (Plain /health 401s/404s → false unhealthy →
+		// would break status "ready" + auto-rollback restart/upgrade/repair/redeploy.)
+		HealthPath:              "/api/status",
 		ReleasePrefix:           "",
 		CreateNamespace:         false,
-		RuntimeNodeCoreImage:    "ghcr.io/taalib25/runtime-node-core",
+		RuntimeNodeCoreImage: "nousresearch/hermes-agent",
+		// Official upstream image. It ships the web dashboard as the `hermes dashboard`
+		// subcommand (port 9119), runs as root under tini (no s6), HERMES_HOME=/opt/data.
+		// Consider pinning a CalVer tag (e.g. v2026.6.5) + digest for reproducibility (Phase 0b).
 		RuntimeNodeCoreImageTag: "latest",
 	}
 }

@@ -199,16 +199,10 @@ func derivePhase(status InstanceStatus, healthErr error) string {
 	return "creating"
 }
 
-func dashboardHost(spec InstanceSpec) string {
-	host := spec.Network.host()
-	if host == "" {
-		return ""
-	}
-	return "dash-" + host
-}
-
+// dashboardURL is the tenant's access URL. The main host serves the Hermes web
+// dashboard (port 9119) directly, so it is just the instance host.
 func dashboardURL(spec InstanceSpec) string {
-	h := dashboardHost(spec)
+	h := spec.Network.host()
 	if h == "" {
 		return ""
 	}
