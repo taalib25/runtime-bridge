@@ -10,6 +10,10 @@
 !go.mod
 !go.sum
 
-# Re-include Helm chart (baked into image)
+# Re-include Helm charts (baked into image)
+# hermes-agent is the active runtime (BRIDGE_CHART_PATH=/charts/hermes-agent);
+# runtime-node-core is kept for rollback. Both are COPYed in the Dockerfile.
+!charts/hermes-agent
+!charts/hermes-agent/**
 !charts/runtime-node-core
 !charts/runtime-node-core/**
