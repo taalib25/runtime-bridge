@@ -76,6 +76,12 @@ jobs:
           username: taalib25
           password: ${{ secrets.GHCR_PAT }}
 
+      # The default buildx "docker" driver cannot export a registry cache
+      # (cache-to: type=registry). Set up a docker-container driver builder,
+      # which supports registry cache import/export.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and push bridge image
         uses: docker/build-push-action@v5
         with:
