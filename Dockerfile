@@ -19,6 +19,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /
 COPY --from=builder /workspace/bridge .
+# Bundle both charts: hermes-agent is the active runtime (BRIDGE_CHART_PATH=/charts/hermes-agent);
+# runtime-node-core is kept for rollback.
+COPY charts/hermes-agent /charts/hermes-agent
 COPY charts/runtime-node-core /charts/runtime-node-core
 USER 65532:65532
 
