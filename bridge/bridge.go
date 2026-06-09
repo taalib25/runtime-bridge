@@ -50,6 +50,7 @@ type Bridge struct {
 	ready          atomic.Bool
 	maintenance    atomic.Bool // true → reject new instance creates; set via PUT /v1/cluster/maintenance
 	draining       atomic.Bool // true → drain in progress; prevents concurrent drains
+	permMissing    atomic.Value // []string; set once at startup by checkPermissions(); nil = check not run
 	runner         *OperationRunner
 	pendingCreates sync.Map // instanceID → pendingCreate; throttles duplicate creates
 	pendingOps     sync.Map // instanceID → *inflightOp; throttles duplicate async ops, allows supersede
@@ -103,6 +104,17 @@ func NewBridge(cfg Config) (*Bridge, error) {
 	}
 
 	bridge.ready.Store(true)
+
+	// RBAC self-check: non-fatal — bridge starts regardless; result surfaces in /readyz.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	missing := bridge.checkPermissions(ctx)
+	bridge.permMissing.Store(missing)
+	if len(missing) > 0 {
+		bridge.Logger.Printf("[RBAC] WARNING: missing permissions (bridge will be degraded): %s",
+			strings.Join(missing, ", "))
+	}
+
 	return bridge, nil
 }
 

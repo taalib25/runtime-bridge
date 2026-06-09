@@ -252,7 +252,17 @@ func (b *Bridge) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: "not ready", Details: err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "cluster": b.ClusterName, "version": version, "build": build})
+	base := map[string]any{"cluster": b.ClusterName, "version": version, "build": build}
+	if v := b.permMissing.Load(); v != nil {
+		if missing, ok := v.([]string); ok && len(missing) > 0 {
+			base["status"] = "degraded"
+			base["missingPermissions"] = missing
+			writeJSON(w, http.StatusOK, base)
+			return
+		}
+	}
+	base["status"] = "ready"
+	writeJSON(w, http.StatusOK, base)
 }
 
 func (b *Bridge) handleGetOperation(w http.ResponseWriter, r *http.Request) {
