@@ -1,0 +1,28 @@
+# Manual bridge deploy for hermes-eu-2.
+# Prerequisites:
+#   - GitHub Environment "hermes-eu-2" must exist with secrets:
+#       NODE_IP, SSH_PRIVATE_KEY, BRIDGE_SECRET, GHCR_PAT, ADMIN_API_SECRET
+#   - Cluster must be provisioned (provision-cluster.sh cluster-config-eu-2.yaml hermes-eu-2 eu)
+#
+# On-push automation: add hermes-eu-2 to bridge.yml's deploy-production matrix after P4 merges.
+
+name: Deploy hermes-eu-2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy-bridge.yml
+    with:
+      cluster_name: hermes-eu-2
+      region: eu
+      # P4: pass git_sha from a pre-built image once build-once CI (P4) is merged.
+      # P5: bridge_url wires the HTTPS URL into the backend registration.
+      bridge_url: https://bridge-hermes-eu-2.hermeshq.net
+    secrets:
+      NODE_IP: ${{ secrets.NODE_IP }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
+      GHCR_PAT: ${{ secrets.GHCR_PAT }}
+      ADMIN_API_SECRET: ${{ secrets.ADMIN_API_SECRET }}
