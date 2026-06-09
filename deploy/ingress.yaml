@@ -8,7 +8,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: bridge.hermeshq.net
+    - host: bridge-__CLUSTER_NAME__.hermeshq.net
       http:
         paths:
           - path: /
