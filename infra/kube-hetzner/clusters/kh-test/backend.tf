@@ -2,7 +2,7 @@ terraform {
   backend "s3" {
     bucket = "hermes-tofu-state"
     key    = "clusters/kh-test/tofu.tfstate"
-    region = "us-east-1"  # R2 SigV4 requires a concrete region; "auto" breaks signing
+    region = "auto"
 
     # endpoint injected at tofu init via -backend-config="endpoint=..."
     # credentials injected via AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars

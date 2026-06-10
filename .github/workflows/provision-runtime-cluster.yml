@@ -69,22 +69,6 @@ jobs:
           echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
           rm -f /tmp/id_rsa
 
-      - name: Diagnose R2 connectivity
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        run: |
-          pip install awscli --quiet
-          echo "=== region auto ==="
-          aws s3 ls s3://hermes-tofu-state \
-            --endpoint-url "${{ vars.R2_ENDPOINT }}" \
-            --region auto
-          echo "=== region us-east-1 ==="
-          aws s3 ls s3://hermes-tofu-state \
-            --endpoint-url "${{ vars.R2_ENDPOINT }}" \
-            --region us-east-1
-          echo "=== done ==="
-
       - name: tofu init
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
