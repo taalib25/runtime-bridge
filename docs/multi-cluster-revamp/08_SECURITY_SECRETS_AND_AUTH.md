@@ -102,7 +102,7 @@ GitHub Actions:
   HCLOUD_TOKEN
   CLOUDFLARE_API_TOKEN
   CLOUDFLARE_ZONE_ID
-  BACKEND_REGISTER_TOKEN
+  ADMIN_API_SECRET
 
 Backend:
   BRIDGE_AUTH_PRIVATE_KEY
@@ -205,14 +205,14 @@ warns about possible secrets
 
 ## Backend Registration Security
 
-`POST /internal/runtime-clusters/register`:
+`POST /api/admin/clusters`:
 
 ```txt
-- protected by BACKEND_REGISTER_TOKEN
+- protected by ADMIN_API_SECRET (Authorization: Bearer)
 - only GitHub Actions should call it
 - idempotent upsert by cluster_id
-- rejects raw HTTP production bridge URLs
-- rejects unknown provisioner unless explicitly allowed
+- bridge_secret encrypted at rest (AES-256-GCM, SECRETS_ENCRYPTION_KEY)
+- production bridge_url should be https:// (http:// is not production-ready)
 ```
 
 ## Network Policy
@@ -236,8 +236,8 @@ BRIDGE_AUTH_PRIVATE_KEY:
   support key id/kid
   allow overlapping old/new public keys during rotation
 
-BACKEND_REGISTER_TOKEN:
-  rotate manually through GitHub secret and backend config
+ADMIN_API_SECRET:
+  rotate manually through GitHub secret and backend config (ADMIN_API_SECRET env var)
 
 Agent provider/messenger secrets:
   rotate through backend -> bridge -> Secret patch -> restart/reload

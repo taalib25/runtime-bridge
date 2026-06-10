@@ -43,8 +43,9 @@ HermesCloud backend manages product state, routing, billing, operations, and sup
 11. `10_TESTING_VALIDATION_AND_ROLLOUT.md` — kh-test proof, rollout, rollback, cutover.
 12. `11_CODING_AGENT_HANDOFF_PROMPT.md` — Copy-paste prompt for the coding agent.
 13. `12_PATCHED_CONTRACTS_SUMMARY.md` — Summary of contracts added after grill review.
-14. `CONTEXT.md` — Glossary and canonical language.
-15. `docs/adr/*.md` — Accepted architecture decisions.
+14. `13_INTEGRATION_REVIEW_2026-06-10.md` — Code-verified end-to-end integration review: contract table, risk register, phased correction plan.
+15. `CONTEXT.md` — Glossary and canonical language.
+16. `docs/adr/*.md` — Accepted architecture decisions.
 
 ## Migration Strategy
 

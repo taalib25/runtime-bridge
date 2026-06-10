@@ -198,7 +198,7 @@ R2_SECRET_ACCESS_KEY
 R2_ENDPOINT
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ZONE_ID
-BACKEND_REGISTER_TOKEN
+ADMIN_API_SECRET
 BRIDGE_AUTH_PUBLIC_KEY
 ```
 
@@ -211,16 +211,26 @@ Create a strong internal token for GitHub Actions to register a cluster with the
 Secret name:
 
 ```txt
-BACKEND_REGISTER_TOKEN
+ADMIN_API_SECRET
 ```
 
-Backend endpoint:
+Backend endpoint (real, existing):
 
 ```txt
-POST /internal/runtime-clusters/register
+POST /api/admin/clusters
+Authorization: Bearer $ADMIN_API_SECRET
+Content-Type: application/json
+
+{
+  "cluster_id":    "<cluster-name>",
+  "bridge_url":    "https://bridge-<cluster>.hermeshq.net",
+  "bridge_secret": "<BRIDGE_SECRET>",
+  "region":        "eu",
+  "status":        "active"
+}
 ```
 
-Only GitHub Actions should use this.
+Only GitHub Actions should use this. The call is idempotent — safe to re-run.
 
 ## 9. Bridge Auth Keys
 

@@ -125,35 +125,32 @@ expired
 ## Cluster Registration Endpoint
 
 ```txt
-POST /internal/runtime-clusters/register
+POST /api/admin/clusters
+Authorization: Bearer $ADMIN_API_SECRET
 ```
 
-Protected by `BACKEND_REGISTER_TOKEN`.
+This is the **real, existing** endpoint — do not use `/internal/runtime-clusters/register` (it does not exist).
 
 Payload:
 
 ```json
 {
-  "clusterId": "kh-test",
-  "provider": "hetzner",
-  "provisioner": "kube-hetzner",
-  "region": "fsn1",
-  "bridgeUrl": "https://bridge-kh-test.hermeshq.net",
-  "runtimeBaseDomain": "runtime-kh-test.hermeshq.net",
-  "ingressIp": "x.x.x.x",
-  "bridgeVersion": "abc123",
-  "status": "maintenance"
+  "cluster_id":    "kh-test",
+  "bridge_url":    "https://bridge-kh-test.hermeshq.net",
+  "bridge_secret": "<BRIDGE_SECRET>",
+  "region":        "eu",
+  "name":          "kh-test",
+  "status":        "active"
 }
 ```
 
 Validation:
 
 ```txt
-- production bridgeUrl must start with https://
-- raw http://NODE_IP bridgeUrl rejected in production
-- cluster_id is idempotent upsert
-- runtime_base_domain must match expected domain pattern
-- bridge version required after validation pipeline
+- bridge_url must start with https:// in production
+- raw http://NODE_IP bridge_url not production-ready
+- cluster_id is idempotent upsert (safe to re-run)
+- bridge_secret is encrypted at rest (AES-256-GCM)
 ```
 
 ## Health Poller

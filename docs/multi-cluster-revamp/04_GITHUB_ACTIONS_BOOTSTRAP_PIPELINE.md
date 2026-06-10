@@ -215,23 +215,22 @@ Security:
 
 ### Job 5 — register-backend
 
-Call:
+Call (see §Backend Registration — Exact Contract above for the full example):
 
 ```txt
-POST /internal/runtime-clusters/register
+POST /api/admin/clusters
+Authorization: Bearer $ADMIN_API_SECRET
 ```
 
 Payload:
 
 ```json
 {
-  "clusterId": "kh-test",
-  "provider": "hetzner",
-  "provisioner": "kube-hetzner",
-  "bridgeUrl": "https://bridge-kh-test.hermeshq.net",
-  "runtimeBaseDomain": "runtime-kh-test.hermeshq.net",
-  "ingressIp": "x.x.x.x",
-  "bridgeVersion": "abc123",
+  "cluster_id":    "kh-test",
+  "bridge_url":    "https://bridge-kh-test.hermeshq.net",
+  "bridge_secret": "<BRIDGE_SECRET>",
+  "region":        "eu",
+  "name":          "kh-test",
   "status": "maintenance"
 }
 ```
