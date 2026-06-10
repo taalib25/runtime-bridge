@@ -124,10 +124,8 @@ jobs:
 
           if [ -n "$SSH_KEY_ID" ]; then
             echo "Found existing Hetzner SSH key ID $SSH_KEY_ID — importing into state"
+            # Backend already initialised by tofu init — no -backend-config needed
             tofu import \
-              -backend-config="endpoint=${{ vars.R2_ENDPOINT }}" \
-              -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
-              -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}" \
               'module.kh_test.module.kube_hetzner.hcloud_ssh_key.k3s[0]' \
               "$SSH_KEY_ID" || echo "Import skipped (already in state or not applicable)"
           else
