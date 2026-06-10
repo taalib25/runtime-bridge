@@ -69,6 +69,18 @@ jobs:
           echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
           rm -f /tmp/id_rsa
 
+      - name: Verify R2 credentials
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          pip install awscli --quiet
+          aws s3 ls s3://hermes-tofu-state \
+            --endpoint-url "${{ vars.R2_ENDPOINT }}" \
+            --region auto \
+            && echo "R2 credentials OK" \
+            || echo "R2 credentials FAILED"
+
       - name: tofu init
         env:
           AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
