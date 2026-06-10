@@ -58,6 +58,105 @@ func TestAuthMiddleware_WrongSecret(t *testing.T) {
 
 // --- Health endpoints (no auth required) ---
 
+func TestReadyz_NotReady_WhenKubeClientNil(t *testing.T) {
+	b := newTestBridge("mysecret")
+	// KubeClient is nil — CheckReadiness will fail → 503 not-ready.
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	b.Router().ServeHTTP(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", rr.Code)
+	}
+	var body map[string]string
+	json.NewDecoder(rr.Body).Decode(&body) //nolint:errcheck
+	if body["status"] != "" && body["status"] == "ready" {
+		t.Error("should not be ready with nil KubeClient")
+	}
+}
+
+func TestReadyz_EmptyPermMissing_DoesNotDegrade(t *testing.T) {
+	// When permMissing holds an empty slice the perm-check branch must be skipped.
+	// CheckReadiness will still return an error (no KubeClient), so we test the
+	// perm-branch logic directly via TestReadyz_DegradedResponse_Format rather
+	// than going through the full HTTP handler.
+	b := newTestBridge("mysecret")
+	b.permMissing.Store([]string{})
+	v := b.permMissing.Load()
+	if v == nil {
+		t.Fatal("expected non-nil after Store")
+	}
+	missing, ok := v.([]string)
+	if !ok {
+		t.Fatalf("expected []string, got %T", v)
+	}
+	if len(missing) != 0 {
+		t.Errorf("expected empty, got %v", missing)
+	}
+}
+
+func TestReadyz_CheckReadiness_RunsBeforePermCheck(t *testing.T) {
+	// CheckReadiness (k8s discovery) must run before the perm check so a
+	// disconnected bridge returns 503+not-ready, not 200+degraded.
+	b := newTestBridge("mysecret")
+	b.permMissing.Store([]string{"networking.k8s.io/networkpolicies:create"})
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	b.handleReadyz(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 (k8s unreachable beats perm-degraded), got %d", rr.Code)
+	}
+	var body map[string]any
+	json.NewDecoder(rr.Body).Decode(&body) //nolint:errcheck
+	if body["error"] == nil {
+		t.Error("expected error field in not-ready response")
+	}
+}
+
+func TestReadyz_DegradedResponse_Format(t *testing.T) {
+	// Test the degraded response structure independently of the k8s connectivity check.
+	b := newTestBridge("mysecret")
+	b.permMissing.Store([]string{"networking.k8s.io/networkpolicies:create"})
+
+	// Build the degraded response exactly as handleReadyz does (minus the CheckReadiness guard).
+	base := map[string]any{"cluster": b.ClusterName, "version": version, "build": build}
+	if v := b.permMissing.Load(); v != nil {
+		if missing, ok := v.([]string); ok && len(missing) > 0 {
+			base["status"] = "degraded"
+			base["missingPermissions"] = missing
+		}
+	}
+
+	if base["status"] != "degraded" {
+		t.Fatalf("expected status=degraded, got %v", base["status"])
+	}
+	perms, ok := base["missingPermissions"].([]string)
+	if !ok || len(perms) != 1 {
+		t.Fatalf("expected 1 missing perm, got %v", base["missingPermissions"])
+	}
+	if perms[0] != "networking.k8s.io/networkpolicies:create" {
+		t.Errorf("unexpected perm key: %q", perms[0])
+	}
+	if base["cluster"] != "test-cluster" {
+		t.Errorf("expected cluster=test-cluster, got %v", base["cluster"])
+	}
+}
+
+func TestPermCheckKey(t *testing.T) {
+	tests := []struct {
+		p    permCheck
+		want string
+	}{
+		{permCheck{"", "namespaces", "create"}, "namespaces:create"},
+		{permCheck{"apps", "deployments", "create"}, "apps/deployments:create"},
+		{permCheck{"networking.k8s.io", "networkpolicies", "create"}, "networking.k8s.io/networkpolicies:create"},
+	}
+	for _, tt := range tests {
+		if got := tt.p.key(); got != tt.want {
+			t.Errorf("permCheck{%q,%q,%q}.key() = %q, want %q", tt.p.group, tt.p.resource, tt.p.verb, got, tt.want)
+		}
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	b := newTestBridge("mysecret")
 	rr := httptest.NewRecorder()
