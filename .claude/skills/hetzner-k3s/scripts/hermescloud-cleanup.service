@@ -1,0 +1,10 @@
+[Unit]
+Description=HermesCloud node image + log cleanup
+Documentation=https://github.com/taalib25/hermes-runtime-operator/blob/main/docs/runtime-cluster-cloning-plan.md
+After=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hermescloud-cleanup
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run HermesCloud node cleanup nightly
+
+[Timer]
+# Nightly at 03:00 UTC; Persistent catches up if the node was off at the time.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
