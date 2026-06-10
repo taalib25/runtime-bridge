@@ -4,10 +4,11 @@ terraform {
     key    = "clusters/kh-test/tofu.tfstate"
     region = "auto"
 
-    # endpoint is injected at tofu init time via -backend-config=endpoint=...
-    # or TF_BACKEND_CONFIG_endpoint env var in CI.
+    # endpoint injected at tofu init via -backend-config="endpoint=..."
+    # credentials injected via AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env vars
 
-    use_lockfile = true
+    use_lockfile     = true
+    force_path_style = true  # required for Cloudflare R2
 
     skip_credentials_validation = true
     skip_region_validation      = true
