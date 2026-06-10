@@ -78,10 +78,7 @@ jobs:
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          tofu init \
-            -backend-config="endpoint=${{ vars.R2_ENDPOINT }}" \
-            -backend-config="access_key=${AWS_ACCESS_KEY_ID}" \
-            -backend-config="secret_key=${AWS_SECRET_ACCESS_KEY}"
+          tofu init -backend-config="endpoint=${{ vars.R2_ENDPOINT }}"
 
       - name: tofu fmt check
         run: tofu fmt -check -recursive
@@ -146,10 +143,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
-          tofu init \
-            -backend-config="endpoint=${{ vars.R2_ENDPOINT }}" \
-            -backend-config="access_key=${AWS_ACCESS_KEY_ID}" \
-            -backend-config="secret_key=${AWS_SECRET_ACCESS_KEY}"
+          tofu init -backend-config="endpoint=${{ vars.R2_ENDPOINT }}"
 
       - name: tofu apply
         env:
