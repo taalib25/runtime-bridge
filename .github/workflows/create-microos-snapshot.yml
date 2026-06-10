@@ -28,6 +28,7 @@ jobs:
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           if [ "$COUNT" -gt 0 ]; then
             echo "✅ MicroOS x86 snapshot already exists ($COUNT found) — nothing to do"
+            hcloud image list --type snapshot --architecture x86 --selector microos-snapshot=yes
           else
             echo "ℹ️ No MicroOS snapshot found — will create one"
           fi
@@ -45,21 +46,20 @@ jobs:
       - name: Download kube-hetzner Packer template
         if: steps.check.outputs.count == '0'
         run: |
-          curl -fsSLo packer-template.pkr.hcl \
-            https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/v2.20.0/packer-template.pkr.hcl
+          curl -fsSLo hcloud-microos-snapshots.pkr.hcl \
+            https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/v2.20.0/packer-template/hcloud-microos-snapshots.pkr.hcl
 
       - name: Build MicroOS snapshot
         if: steps.check.outputs.count == '0'
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
-          packer init packer-template.pkr.hcl
-          packer build packer-template.pkr.hcl
-          echo "✅ MicroOS snapshot created"
+          packer init hcloud-microos-snapshots.pkr.hcl
+          packer build -only='*.microos-x86-snapshot' hcloud-microos-snapshots.pkr.hcl
+          echo "✅ MicroOS x86 snapshot created"
 
       - name: Verify snapshot
         env:
           HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
         run: |
-          hcloud image list --type snapshot --architecture x86 \
-            --selector microos-snapshot=yes
+          hcloud image list --type snapshot --architecture x86 --selector microos-snapshot=yes
