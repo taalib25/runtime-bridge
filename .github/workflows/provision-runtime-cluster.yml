@@ -56,6 +56,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check MicroOS snapshot exists
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz \
+            | tar -xz hcloud
+          sudo mv hcloud /usr/local/bin/hcloud
+          COUNT=$(hcloud image list --type snapshot --architecture x86 \
+            --selector microos-snapshot=yes --output json | jq length)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "❌ No MicroOS x86 snapshot found in Hetzner project."
+            echo "   Run the 'Create MicroOS snapshot' workflow first, then re-run this workflow."
+            exit 1
+          fi
+          echo "✅ MicroOS snapshot exists ($COUNT found)"
+
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v1
         with:

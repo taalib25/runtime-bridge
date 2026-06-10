@@ -1,0 +1,65 @@
+name: Create MicroOS snapshot
+
+# One-time prerequisite for kube-hetzner. Run this once per Hetzner project
+# before provisioning any cluster. Safe to re-run — skips if snapshot exists.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  create-snapshot:
+    name: Create MicroOS x86 snapshot
+    runs-on: ubuntu-latest
+    environment: kh-test
+    steps:
+      - name: Install hcloud CLI
+        run: |
+          curl -fsSL https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz \
+            | tar -xz hcloud
+          sudo mv hcloud /usr/local/bin/hcloud
+
+      - name: Check if snapshot already exists
+        id: check
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          COUNT=$(hcloud image list --type snapshot --architecture x86 \
+            --selector microos-snapshot=yes --output json | jq length)
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "✅ MicroOS x86 snapshot already exists ($COUNT found) — nothing to do"
+          else
+            echo "ℹ️ No MicroOS snapshot found — will create one"
+          fi
+
+      - name: Install Packer
+        if: steps.check.outputs.count == '0'
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+            https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          sudo apt-get update -qq && sudo apt-get install -y packer
+
+      - name: Download kube-hetzner Packer template
+        if: steps.check.outputs.count == '0'
+        run: |
+          curl -fsSLo packer-template.pkr.hcl \
+            https://raw.githubusercontent.com/kube-hetzner/terraform-hcloud-kube-hetzner/v2.20.0/packer-template.pkr.hcl
+
+      - name: Build MicroOS snapshot
+        if: steps.check.outputs.count == '0'
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          packer init packer-template.pkr.hcl
+          packer build packer-template.pkr.hcl
+          echo "✅ MicroOS snapshot created"
+
+      - name: Verify snapshot
+        env:
+          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}
+        run: |
+          hcloud image list --type snapshot --architecture x86 \
+            --selector microos-snapshot=yes
