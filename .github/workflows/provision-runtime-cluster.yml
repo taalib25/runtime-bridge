@@ -113,12 +113,14 @@ jobs:
           # import it so tofu won't try to create it again (uniqueness_error).
           echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > /tmp/id_rsa
           chmod 600 /tmp/id_rsa
-          SSH_PUBLIC_KEY=$(ssh-keygen -y -f /tmp/id_rsa)
+          # Use MD5 fingerprint — Hetzner stores keys by MD5
+          SSH_FINGERPRINT=$(ssh-keygen -l -E md5 -f /tmp/id_rsa | awk '{print $2}' | sed 's/MD5://')
           rm -f /tmp/id_rsa
+          echo "Looking for SSH key with fingerprint: $SSH_FINGERPRINT"
 
           SSH_KEY_ID=$(hcloud ssh-key list --output json \
-            | jq -r --arg pub "$SSH_PUBLIC_KEY" \
-              '.[] | select(.public_key == $pub) | .id // empty')
+            | jq -r --arg fp "$SSH_FINGERPRINT" \
+              '.[] | select(.fingerprint == $fp) | .id // empty')
 
           if [ -n "$SSH_KEY_ID" ]; then
             echo "Found existing Hetzner SSH key ID $SSH_KEY_ID — importing into state"
