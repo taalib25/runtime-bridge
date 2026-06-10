@@ -349,7 +349,7 @@ networkPolicy:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: hermes-bridge    # bridge ClusterIP probes/proxy
+              kubernetes.io/metadata.name: hermes-system    # bridge ClusterIP probes/proxy
   # Egress: DNS + internet (OpenRouter/Anthropic/etc). Cluster-internal CIDRs are excluded
   # to block pod-to-pod lateral movement; 169.254.0.0/16 blocks the cloud metadata endpoint
   # (169.254.169.254) so a compromised agent can't steal node credentials (SSRF).

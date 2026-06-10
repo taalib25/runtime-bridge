@@ -1,0 +1,16 @@
+# Local state — never commit
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.backup
+**/.terraform.lock.hcl
+**/terraform.tfvars
+**/tofu.tfvars
+**/.terraform.tfstate.lock.info
+
+# Kubeconfig outputs
+**/kubeconfig*
+**/kubeconfig-*.yaml
+
+# Plan artifacts — committed only as workflow artifacts, never to repo
+**/tfplan
+**/tofu-outputs.json
