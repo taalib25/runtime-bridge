@@ -463,35 +463,36 @@ jobs:
           echo "ingress_ip=$INGRESS_IP" >> "$GITHUB_OUTPUT"
 
       - name: Register cluster with backend
+        # Endpoint: POST https://api.hermeshq.net/api/admin/clusters
+        # Auth:     Authorization: Bearer <ADMIN_API_SECRET>  (repo-level secret)
+        # Body:     cluster_id, bridge_url, bridge_secret (encrypted + stored by backend),
+        #           status ("maintenance" so admin must explicitly activate)
+        # Idempotent: upserts on cluster_id — safe to re-run.
         env:
           BRIDGE_URL: ${{ needs.bridge-deploy.outputs.bridge_url }}
           RUNTIME_BASE_DOMAIN: ${{ needs.bridge-deploy.outputs.runtime_base_domain }}
           INGRESS_IP: ${{ steps.ip.outputs.ingress_ip }}
-          BACKEND_TOKEN: ${{ secrets.BACKEND_REGISTER_TOKEN }}
+          ADMIN_API_SECRET: ${{ secrets.ADMIN_API_SECRET }}
+          BRIDGE_SECRET: ${{ secrets.BRIDGE_SECRET }}
         run: |
-          if [ -z "$BACKEND_TOKEN" ]; then
-            echo "⚠️  BACKEND_REGISTER_TOKEN not set — skipping backend registration"
-            echo "    Set the secret to enable automatic registration on future runs."
+          if [ -z "$ADMIN_API_SECRET" ]; then
+            echo "⚠️  ADMIN_API_SECRET not set — skipping backend registration"
             exit 0
           fi
 
-          # /healthz returns {"version":..., "build":...} — no auth required
+          # /healthz returns {"build": "<git-sha>"} — no auth required
           BRIDGE_SHA=$(curl -sf "$BRIDGE_URL/healthz" | jq -r '.build // .version // "unknown"')
 
-          # Use -s (not -sf) so the response body is always captured regardless of HTTP status
           HTTP_CODE=$(curl -s -o /tmp/register-resp.json -w "%{http_code}" \
-            -X POST https://api.hermeshq.net/internal/runtime-clusters/register \
-            -H "Authorization: Bearer $BACKEND_TOKEN" \
+            -X POST https://api.hermeshq.net/api/admin/clusters \
+            -H "Authorization: Bearer $ADMIN_API_SECRET" \
             -H "Content-Type: application/json" \
             -d "{
-              \"clusterId\":          \"${{ inputs.cluster_id }}\",
-              \"provider\":           \"hetzner\",
-              \"provisioner\":        \"kube-hetzner\",
-              \"bridgeUrl\":          \"$BRIDGE_URL\",
-              \"runtimeBaseDomain\":  \"$RUNTIME_BASE_DOMAIN\",
-              \"ingressIp\":          \"$INGRESS_IP\",
-              \"bridgeVersion\":      \"$BRIDGE_SHA\",
-              \"status\":             \"maintenance\"
+              \"cluster_id\":    \"${{ inputs.cluster_id }}\",
+              \"bridge_url\":    \"$BRIDGE_URL\",
+              \"bridge_secret\": \"$BRIDGE_SECRET\",
+              \"region\":        \"eu\",
+              \"status\":        \"maintenance\"
             }")
 
           echo "HTTP $HTTP_CODE — response body:"
@@ -499,7 +500,8 @@ jobs:
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
             echo "✅ Cluster registered (status=maintenance) — promote to active via admin API when ready"
           else
-            echo "⚠️  Registration returned HTTP $HTTP_CODE — endpoint not yet implemented; skipping"
+            echo "❌ Registration returned HTTP $HTTP_CODE"
+            exit 1
           fi
 
       - name: Run summary
