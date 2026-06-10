@@ -49,21 +49,51 @@ Per GitHub Environment:
 HCLOUD_TOKEN
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
-R2_ENDPOINT
+R2_ENDPOINT         (var, not secret — set as environment variable)
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ZONE_ID
-BACKEND_REGISTER_TOKEN
-BRIDGE_AUTH_PUBLIC_KEY
+BRIDGE_SECRET
+GHCR_PAT
 ```
 
-Optional according to implementation:
+Repo-level (not per-environment):
 
 ```txt
-GHCR_TOKEN
+ADMIN_API_SECRET    — used by register-backend job to call POST /api/admin/clusters
+HETZNER_SSH_PRIVATE_KEY
+```
+
+Optional:
+
+```txt
 BACKUP_BUCKET credentials
 ```
 
-Do not add TERRAFORM_CLOUD_TOKEN. OpenTofu uses Hetzner Object Storage for state.
+Do not add TERRAFORM_CLOUD_TOKEN. OpenTofu uses Cloudflare R2 for state.
+
+## Backend Registration — Exact Contract
+
+The `register-backend` job calls the **existing** admin endpoint:
+
+```
+POST https://api.hermeshq.net/api/admin/clusters
+Authorization: Bearer <ADMIN_API_SECRET>
+Content-Type: application/json
+
+{
+  "cluster_id":    "kh-test",
+  "bridge_url":    "https://bridge-kh-test.hermeshq.net",
+  "bridge_secret": "<BRIDGE_SECRET>",
+  "region":        "eu",
+  "status":        "maintenance"
+}
+```
+
+- `ADMIN_API_SECRET` is the **repo-level** secret (not per-environment).
+- `bridge_secret` is required in the body — the backend encrypts and stores it so it can authenticate future bridge API calls.
+- The call is **idempotent** (upsert on `cluster_id`) — safe to re-run.
+- New clusters register as `maintenance`. Admin promotes to `active` via the admin dashboard.
+- Do NOT use `/internal/runtime-clusters/register` — that endpoint does not exist.
 
 ## Pipeline Jobs
 

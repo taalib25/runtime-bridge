@@ -7,6 +7,10 @@ module "kube_hetzner" {
   source  = "kube-hetzner/kube-hetzner/hcloud"
   version = "2.20.0"
 
+  providers = {
+    hcloud = hcloud
+  }
+
   hcloud_token    = var.hcloud_token
   ssh_public_key  = var.ssh_public_key
   ssh_private_key = var.ssh_private_key
