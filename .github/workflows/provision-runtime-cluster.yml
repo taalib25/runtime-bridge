@@ -59,7 +59,7 @@ jobs:
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v1
         with:
-          tofu_version: "1.9.1"
+          tofu_version: "1.10.3"
 
       - name: Derive SSH public key from private key
         run: |
@@ -125,7 +125,7 @@ jobs:
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v1
         with:
-          tofu_version: "1.9.1"
+          tofu_version: "1.10.3"
 
       - name: Download plan artifact
         uses: actions/download-artifact@v4
