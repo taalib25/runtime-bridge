@@ -247,6 +247,15 @@ func (b *Bridge) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "cluster": b.ClusterName, "version": version, "build": build})
 }
 
+func (b *Bridge) handleVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"version":   version,
+		"build":     build,
+		"clusterId": b.ClusterName,
+		"apiVersion": "v1",
+	})
+}
+
 func (b *Bridge) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	if err := b.CheckReadiness(r.Context()); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, ErrorResponse{Error: "not ready", Details: err.Error()})
