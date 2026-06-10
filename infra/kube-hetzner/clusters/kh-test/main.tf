@@ -24,6 +24,11 @@ provider "cloudflare" {
 module "kh_test" {
   source = "../../modules/runtime-cluster"
 
+  providers = {
+    hcloud     = hcloud
+    cloudflare = cloudflare
+  }
+
   cluster_id         = "kh-test"
   hcloud_token       = var.hcloud_token
   ssh_public_key     = var.ssh_public_key
