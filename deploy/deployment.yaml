@@ -7,7 +7,9 @@ metadata:
     app.kubernetes.io/name: hermes-bridge
     app.kubernetes.io/part-of: hermes-platform
 spec:
-  replicas: 2
+  replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: hermes-bridge
@@ -15,18 +17,18 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: hermes-bridge
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: hermes-bridge
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
-        seccompProfile:
-          type: RuntimeDefault
+      imagePullSecrets:
+        - name: ghcr-pull
       containers:
         - name: bridge
-          image: hermes-bridge:latest
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/taalib25/hermes-bridge:__BRIDGE_IMAGE__
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080
@@ -37,17 +39,17 @@ spec:
                 secretKeyRef:
                   name: bridge-auth
                   key: secret
-            - name: KUBECONFIG
-              value: /etc/kubernetes/kubeconfig
-            - name: CHART_PATH
+            - name: BRIDGE_CLUSTER_NAME
+              value: "__CLUSTER_ID__"
+            - name: BRIDGE_NAMESPACE
+              value: "__BRIDGE_NAMESPACE__"
+            - name: BRIDGE_CHART_PATH
               value: /charts/hermes-agent
-            - name: CLUSTER_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.labels['topology.kubernetes.io/zone']
-            - name: LOG_LEVEL
-              value: "info"
-            - name: SYNC_INTERVAL
+            - name: BRIDGE_DEFAULT_DOMAIN
+              value: "__RUNTIME_BASE_DOMAIN__"
+            - name: BRIDGE_CORS_ORIGINS
+              value: "https://hermes-hut-client.vercel.app,http://localhost:3000,http://localhost:3001"
+            - name: BRIDGE_SYNC_INTERVAL
               value: "5m"
           resources:
             requests:
@@ -56,19 +58,6 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop:
-                - ALL
-          volumeMounts:
-            - name: kubeconfig
-              mountPath: /etc/kubernetes
-              readOnly: true
-            - name: charts
-              mountPath: /charts
-              readOnly: true
           livenessProbe:
             httpGet:
               path: /healthz
@@ -81,21 +70,4 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
-      volumes:
-        - name: kubeconfig
-          secret:
-            secretName: bridge-kubeconfig
-            defaultMode: 0400
-        - name: charts
-          configMap:
-            name: hermes-agent-chart
       terminationGracePeriodSeconds: 30
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchLabels:
-                    app.kubernetes.io/name: hermes-bridge
-                topologyKey: kubernetes.io/hostname
