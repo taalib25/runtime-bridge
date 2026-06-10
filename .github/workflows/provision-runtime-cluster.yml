@@ -63,7 +63,7 @@ jobs:
 
       - name: Derive SSH public key from private key
         run: |
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/id_rsa
+          echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > /tmp/id_rsa
           chmod 600 /tmp/id_rsa
           SSH_PUBLIC_KEY=$(ssh-keygen -y -f /tmp/id_rsa)
           echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
@@ -74,7 +74,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
-          TF_VAR_ssh_private_key:    ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -89,7 +89,7 @@ jobs:
       - name: tofu validate
         env:
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
-          TF_VAR_ssh_private_key:    ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
         run: tofu validate
 
@@ -98,7 +98,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
-          TF_VAR_ssh_private_key:    ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: tofu plan -out=tfplan
@@ -135,7 +135,7 @@ jobs:
 
       - name: Derive SSH public key
         run: |
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/id_rsa
+          echo "${{ secrets.HETZNER_SSH_PRIVATE_KEY }}" > /tmp/id_rsa
           chmod 600 /tmp/id_rsa
           SSH_PUBLIC_KEY=$(ssh-keygen -y -f /tmp/id_rsa)
           echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
@@ -156,7 +156,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
-          TF_VAR_ssh_private_key:    ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: tofu apply tfplan
