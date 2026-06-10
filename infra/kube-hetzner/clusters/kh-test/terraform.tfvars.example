@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars for local runs. Never commit terraform.tfvars.
+# In CI, all variables are injected via TF_VAR_* environment variables.
+
+hcloud_token       = "YOUR_HCLOUD_TOKEN"
+cloudflare_zone_id = "YOUR_CLOUDFLARE_ZONE_ID"
+
+# ssh_public_key and ssh_private_key are derived from SSH_PRIVATE_KEY in CI:
+#
+#   echo "$SSH_PRIVATE_KEY" > /tmp/id_rsa && chmod 600 /tmp/id_rsa
+#   export TF_VAR_ssh_private_key="$SSH_PRIVATE_KEY"
+#   export TF_VAR_ssh_public_key="$(ssh-keygen -y -f /tmp/id_rsa)"
+#
+# For local runs, paste your key contents here:
+ssh_public_key  = "ssh-ed25519 AAAA... taalib@TAALIB-ASAF"
+ssh_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"

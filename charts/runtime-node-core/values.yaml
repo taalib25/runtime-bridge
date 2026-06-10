@@ -133,7 +133,7 @@ probes:
 networkPolicy:
   enabled: true
   traefikNamespace: kube-system   # namespace Traefik runs in (k3s default)
-  bridgeNamespace: hermes-bridge  # namespace the bridge runs in
+  bridgeNamespace: hermes-system   # namespace the bridge runs in (hermes-test legacy: hermes-bridge)
   clusterCIDR: 10.42.0.0/16       # k3s flannel pod CIDR — excluded from internet egress
   serviceCIDR: 10.43.0.0/16       # k3s service CIDR — excluded from internet egress
 

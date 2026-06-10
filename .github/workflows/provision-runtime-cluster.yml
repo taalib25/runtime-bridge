@@ -1,0 +1,193 @@
+name: Provision runtime cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster_id:
+        description: "Runtime cluster to provision"
+        required: true
+        type: choice
+        options:
+          - kh-test
+          - eu-1
+          - eu-2
+      action:
+        description: "Plan only, or plan + apply"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+      confirm_apply:
+        description: "For eu-1/eu-2 apply: type the cluster_id again to confirm"
+        required: false
+        default: ""
+
+jobs:
+  guard:
+    name: Confirm production apply
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation for production clusters
+        run: |
+          CLUSTER="${{ inputs.cluster_id }}"
+          ACTION="${{ inputs.action }}"
+          CONFIRM="${{ inputs.confirm_apply }}"
+          if [[ "$ACTION" == "apply" && ( "$CLUSTER" == "eu-1" || "$CLUSTER" == "eu-2" ) ]]; then
+            if [[ "$CONFIRM" != "$CLUSTER" ]]; then
+              echo "❌ Production apply requires confirm_apply == cluster_id"
+              echo "   cluster_id:    $CLUSTER"
+              echo "   confirm_apply: $CONFIRM"
+              exit 1
+            fi
+            echo "✅ Production apply confirmed for $CLUSTER"
+          else
+            echo "✅ Guard passed (kh-test or plan-only)"
+          fi
+
+  tofu-plan:
+    name: OpenTofu plan — ${{ inputs.cluster_id }}
+    needs: guard
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.cluster_id }}
+    defaults:
+      run:
+        working-directory: infra/kube-hetzner/clusters/${{ inputs.cluster_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.9.1"
+
+      - name: Derive SSH public key from private key
+        run: |
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/id_rsa
+          chmod 600 /tmp/id_rsa
+          SSH_PUBLIC_KEY=$(ssh-keygen -y -f /tmp/id_rsa)
+          echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
+          rm -f /tmp/id_rsa
+
+      - name: tofu init
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_private_key:    ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          tofu init \
+            -backend-config="endpoint=${{ vars.R2_ENDPOINT }}" \
+            -backend-config="access_key=${AWS_ACCESS_KEY_ID}" \
+            -backend-config="secret_key=${AWS_SECRET_ACCESS_KEY}"
+
+      - name: tofu fmt check
+        run: tofu fmt -check -recursive
+
+      - name: tofu validate
+        env:
+          TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_private_key:    ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: tofu validate
+
+      - name: tofu plan
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_private_key:    ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: tofu plan -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.cluster_id }}-${{ github.run_id }}
+          path: infra/kube-hetzner/clusters/${{ inputs.cluster_id }}/tfplan
+          retention-days: 1
+
+  tofu-apply:
+    name: OpenTofu apply — ${{ inputs.cluster_id }}
+    needs: tofu-plan
+    if: inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.cluster_id }}
+    defaults:
+      run:
+        working-directory: infra/kube-hetzner/clusters/${{ inputs.cluster_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.9.1"
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ inputs.cluster_id }}-${{ github.run_id }}
+          path: infra/kube-hetzner/clusters/${{ inputs.cluster_id }}
+
+      - name: Derive SSH public key
+        run: |
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > /tmp/id_rsa
+          chmod 600 /tmp/id_rsa
+          SSH_PUBLIC_KEY=$(ssh-keygen -y -f /tmp/id_rsa)
+          echo "TF_VAR_ssh_public_key=$SSH_PUBLIC_KEY" >> "$GITHUB_ENV"
+          rm -f /tmp/id_rsa
+
+      - name: tofu init
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          tofu init \
+            -backend-config="endpoint=${{ vars.R2_ENDPOINT }}" \
+            -backend-config="access_key=${AWS_ACCESS_KEY_ID}" \
+            -backend-config="secret_key=${AWS_SECRET_ACCESS_KEY}"
+
+      - name: tofu apply
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_private_key:    ${{ secrets.SSH_PRIVATE_KEY }}
+          TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: tofu apply tfplan
+
+      - name: Export tofu outputs
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: tofu output -json > tofu-outputs.json
+
+      - name: Upload outputs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tofu-outputs-${{ inputs.cluster_id }}-${{ github.run_id }}
+          path: infra/kube-hetzner/clusters/${{ inputs.cluster_id }}/tofu-outputs.json
+          retention-days: 7
+
+      - name: Summary
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          BRIDGE_URL=$(tofu output -raw bridge_url)
+          INGRESS_IP=$(tofu output -raw ingress_ip)
+          RUNTIME_DOMAIN=$(tofu output -raw runtime_base_domain)
+          echo "## Cluster provisioned: ${{ inputs.cluster_id }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Key | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Bridge URL | \`$BRIDGE_URL\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ingress IP | \`$INGRESS_IP\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Runtime domain | \`$RUNTIME_DOMAIN\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| State key | \`clusters/${{ inputs.cluster_id }}/tofu.tfstate\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Next: run the bridge-deploy workflow to deploy and validate the bridge." >> "$GITHUB_STEP_SUMMARY"
