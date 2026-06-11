@@ -116,6 +116,7 @@ func (b *Bridge) handleSetMaintenanceMode(w http.ResponseWriter, r *http.Request
 	}
 	b.maintenance.Store(req.Enabled)
 	b.Logger.Printf("[Maintenance] mode set to %v", req.Enabled)
+	go b.saveMaintenanceState(context.Background(), req.Enabled)
 	writeJSON(w, http.StatusOK, MaintenanceModeResponse{
 		ClusterID:   b.ClusterName,
 		Maintenance: req.Enabled,
@@ -140,6 +141,7 @@ func (b *Bridge) handleDrainCluster(w http.ResponseWriter, r *http.Request) {
 	// Enable maintenance mode synchronously so the backend sees it immediately
 	// on the next cluster/summary poll, before any instance deletions begin.
 	b.maintenance.Store(true)
+	go b.saveMaintenanceState(context.Background(), true)
 
 	op := b.runner.Submit("drain", b.ClusterName, func(ctx context.Context) error {
 		defer b.draining.Store(false)

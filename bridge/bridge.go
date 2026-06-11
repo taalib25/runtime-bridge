@@ -115,6 +115,9 @@ func NewBridge(cfg Config) (*Bridge, error) {
 			strings.Join(missing, ", "))
 	}
 
+	// Restore persisted maintenance state so a pod restart doesn't silently re-enter service.
+	bridge.loadMaintenanceState(ctx)
+
 	return bridge, nil
 }
 
