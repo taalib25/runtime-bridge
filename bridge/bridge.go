@@ -166,6 +166,7 @@ func (b *Bridge) Router() http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/healthz", b.handleHealthz).Methods(http.MethodGet)
 	r.HandleFunc("/readyz", b.handleReadyz).Methods(http.MethodGet)
+	r.HandleFunc("/version", b.handleVersion).Methods(http.MethodGet)
 	r.Handle("/metrics", promhttp.Handler()).Methods(http.MethodGet)
 
 	v1 := r.PathPrefix("/v1").Subrouter()
