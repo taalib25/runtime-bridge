@@ -58,6 +58,6 @@ resource "cloudflare_dns_record" "runtime_wildcard" {
   type    = "A"
   content = module.kube_hetzner.ingress_public_ipv4
   ttl     = 1
-  proxied = var.cloudflare_proxied
+  proxied = var.cloudflare_runtime_proxied
   comment = "HermesCloud runtime wildcard — ${var.cluster_id}"
 }

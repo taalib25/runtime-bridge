@@ -32,9 +32,15 @@ variable "cloudflare_zone_id" {
 }
 
 variable "cloudflare_proxied" {
-  description = "Whether to proxy DNS records through Cloudflare (orange cloud). Required for edge TLS."
+  description = "Whether to proxy the bridge DNS record through Cloudflare (orange cloud). Bridge subdomain is single-level so Cloudflare's wildcard cert covers it."
   type        = bool
   default     = true
+}
+
+variable "cloudflare_runtime_proxied" {
+  description = "Whether to proxy runtime wildcard DNS through Cloudflare. Default false: Cloudflare free plan's wildcard cert only covers *.hermeshq.net, not second-level wildcards like *.runtime-{id}.hermeshq.net. Set to true only on Business/Enterprise plans."
+  type        = bool
+  default     = false
 }
 
 variable "root_domain" {
