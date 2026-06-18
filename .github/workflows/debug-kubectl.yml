@@ -48,39 +48,27 @@ jobs:
 
       - name: Service
         run: |
-          echo "## Service" >> "$GITHUB_STEP_SUMMARY"
-          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
-          kubectl get svc "${{ inputs.namespace }}" -n "${{ inputs.namespace }}" -o yaml >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "===SERVICE==="
+          kubectl get svc "${{ inputs.namespace }}" -n "${{ inputs.namespace }}" -o yaml || true
 
       - name: Endpoints
         run: |
-          echo "## Endpoints" >> "$GITHUB_STEP_SUMMARY"
-          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
-          kubectl get endpoints "${{ inputs.namespace }}" -n "${{ inputs.namespace }}" -o yaml >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "===ENDPOINTS==="
+          kubectl get endpoints "${{ inputs.namespace }}" -n "${{ inputs.namespace }}" -o yaml || true
 
       - name: EndpointSlices
         run: |
-          echo "## EndpointSlices" >> "$GITHUB_STEP_SUMMARY"
-          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
-          kubectl get endpointslices -n "${{ inputs.namespace }}" -o yaml >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "===ENDPOINTSLICES==="
+          kubectl get endpointslices -n "${{ inputs.namespace }}" -o yaml || true
 
       - name: Pods with labels
         run: |
-          echo "## Pods" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          kubectl get pod -n "${{ inputs.namespace }}" --show-labels >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "## Pod conditions" >> "$GITHUB_STEP_SUMMARY"
-          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
-          kubectl get pod -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.conditions[*]}  {.type}={.status} ({.reason}){"\n"}{end}{"\n"}{end}' >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "===PODS==="
+          kubectl get pod -n "${{ inputs.namespace }}" --show-labels || true
+          echo "===POD CONDITIONS==="
+          kubectl get pod -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.conditions[*]}  {.type}={.status} ({.reason}){"\n"}{end}{"\n"}{end}' || true
 
       - name: Deployment selector
         run: |
-          echo "## Deployment selector" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          kubectl get deployment -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.selector}{"\n"}{end}' >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "===DEPLOYMENT SELECTOR==="
+          kubectl get deployment -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.selector}{"\n"}{end}' || true
