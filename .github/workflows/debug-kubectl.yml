@@ -1,0 +1,86 @@
+name: Debug — read-only kubectl
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster_id:
+        description: "Cluster to inspect"
+        required: true
+        type: choice
+        options:
+          - kh-test
+      namespace:
+        description: "Namespace to inspect"
+        required: true
+        type: string
+
+jobs:
+  inspect:
+    name: Inspect ${{ inputs.namespace }} on ${{ inputs.cluster_id }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.cluster_id }}
+    defaults:
+      run:
+        working-directory: infra/kube-hetzner/clusters/${{ inputs.cluster_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.10.3"
+
+      - name: tofu init (read state)
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          tofu init \
+            -backend-config="endpoint=${{ vars.R2_ENDPOINT }}" \
+            -backend-config="access_key=${{ secrets.R2_ACCESS_KEY_ID }}" \
+            -backend-config="secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}"
+
+      - name: Write kubeconfig
+        run: |
+          tofu output -raw kubeconfig > /tmp/kubeconfig
+          chmod 600 /tmp/kubeconfig
+          echo "KUBECONFIG=/tmp/kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Service
+        run: |
+          echo "## Service" >> "$GITHUB_STEP_SUMMARY"
+          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
+          kubectl get svc "${{ inputs.namespace }}" -n "${{ inputs.namespace }}" -o yaml >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Endpoints
+        run: |
+          echo "## Endpoints" >> "$GITHUB_STEP_SUMMARY"
+          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
+          kubectl get endpoints "${{ inputs.namespace }}" -n "${{ inputs.namespace }}" -o yaml >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: EndpointSlices
+        run: |
+          echo "## EndpointSlices" >> "$GITHUB_STEP_SUMMARY"
+          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
+          kubectl get endpointslices -n "${{ inputs.namespace }}" -o yaml >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pods with labels
+        run: |
+          echo "## Pods" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          kubectl get pod -n "${{ inputs.namespace }}" --show-labels >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "## Pod conditions" >> "$GITHUB_STEP_SUMMARY"
+          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
+          kubectl get pod -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.conditions[*]}  {.type}={.status} ({.reason}){"\n"}{end}{"\n"}{end}' >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deployment selector
+        run: |
+          echo "## Deployment selector" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          kubectl get deployment -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.selector}{"\n"}{end}' >> "$GITHUB_STEP_SUMMARY" 2>&1 || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
