@@ -25,7 +25,7 @@ type ClusterSummaryResponse struct {
 	Draining            bool          `json:"draining"`
 	// HeadroomMiB is the estimated free memory available for new instances:
 	// allocatable - systemOverhead - reserved. Negative means the cluster is
-	// over-committed. Backend should exclude clusters where HeadroomMiB < 1024
+	// over-committed. Backend should exclude clusters where HeadroomMiB < 512
 	// (one instance memory request) from routing.
 	HeadroomMiB         int64         `json:"headroomMiB"`
 }

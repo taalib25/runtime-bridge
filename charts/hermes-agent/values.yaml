@@ -419,7 +419,11 @@ npmPackages: []
 resources:
   requests:
     cpu: 500m
-    memory: 1Gi
+    # Lowered from 1Gi so more instances fit on small test nodes (e.g. kh-test, which
+    # only has ~1.2Gi free) — this is the scheduling guarantee, not a hard cap. Keep
+    # in sync with INSTANCE_MEMORY_MIB in apps/server's cluster-scheduler.service.ts,
+    # which mirrors this value for capacity accounting.
+    memory: 512Mi
   limits:
     cpu: "2"
     memory: 4Gi

@@ -560,9 +560,9 @@ func (b *Bridge) checkClusterCapacity(ctx context.Context) error {
 
 	// Headroom check: compare actual reserved memory against what the node can
 	// safely give to instances (allocatable minus overhead for system pods).
-	// instanceMemoryRequestMiB matches the chart default (requests.memory: 1Gi).
+	// instanceMemoryRequestMiB matches the chart default (requests.memory: 512Mi).
 	// If the bridge config ever exposes a configurable default, use that instead.
-	const instanceMemoryRequestMiB = 1024
+	const instanceMemoryRequestMiB = 512
 	safeCapacityMiB := allocatableMiB - systemOverheadMiB
 
 	// Sum reserved memory across all currently managed pods.

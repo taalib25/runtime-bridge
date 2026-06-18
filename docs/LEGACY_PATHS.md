@@ -32,33 +32,27 @@ Production/runtime instances are created by: Bridge → Helm SDK → canonical c
 
 ---
 
-## `charts/runtime-node-core/`
+## `charts/runtime-node-core/` — REMOVED (2026-06-18)
 
-**Status:** Active — current canonical runtime chart for bridge-managed workspaces.
-
-**Purpose:**
-Lightweight Helm chart used by the bridge to deploy Hermes runtime instances.
-All bridge secrets/env handling (`extraSecretKeys`, `extraEnv`) is wired to this chart.
-
-**Coding agent rule:** This is the chart to modify when changing runtime deployment
-behavior. `charts/hermes-agent/` is a more feature-rich chart (see below) that is
-not currently wired into the bridge.
+The lightweight legacy chart (opencode-webui era) has been deleted from the repo
+and from the root `Dockerfile`'s `COPY` instructions. `BRIDGE_CHART_PATH` had
+already pointed at `/charts/hermes-agent` in `deploy/deployment.yaml` for a while
+before the directory itself was removed — this chart was dead weight kept only
+as a rollback option. Do not recreate it; if a rollback is ever needed, restore
+it from git history instead.
 
 ---
 
 ## `charts/hermes-agent/`
 
-**Status:** Feature-rich chart — not currently wired into the bridge.
+**Status:** Active — the only runtime chart, wired into the bridge via
+`BRIDGE_CHART_PATH=/charts/hermes-agent` (see `deploy/deployment.yaml`).
 
 **Purpose:**
-The original Helm chart for Hermes agent deployments. Contains more templates
-(RBAC, NetworkPolicy, ExternalSecret, VirtualService, etc.) and a strict JSON
-schema. Was the chart used before `runtime-node-core` was introduced for the
-bridge-managed path.
-
-**Decision needed (tracked separately):** Either wire this chart into the bridge
-as the canonical runtime chart, or continue with `runtime-node-core`. Do not add
-new production features to this chart unless the bridge is updated to use it.
+Feature-rich Helm chart for Hermes agent deployments (RBAC, NetworkPolicy,
+ExternalSecret, VirtualService, CRD-based operator mode, strict JSON schema).
+This is the chart to modify when changing runtime deployment behavior — there
+is no other chart in the repo.
 
 ---
 
