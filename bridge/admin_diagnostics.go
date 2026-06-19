@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,7 +22,37 @@ type DiagnosticsResponse struct {
 	Service        *ServiceSummary `json:"service,omitempty"`
 	Logs           LogsSummary    `json:"logs"`
 	Events         []InstanceEvent `json:"events"`
+	Timeline       ProvisionTimeline `json:"timeline"`
 	Recommendation string         `json:"recommendation"`
+}
+
+// ProvisionTimeline answers "where did the time go" for a single provision — image
+// pull, container start, app boot, or Service/Endpoints propagation — instead of one
+// opaque "still starting" status. Every *At field is nil when the underlying signal
+// hasn't happened yet (or never will, e.g. ImagePullStartedAt stays nil for an
+// already-cached image) — nil is "hasn't happened", not "unknown"/an error.
+type ProvisionTimeline struct {
+	PodCreatedAt            *time.Time `json:"podCreatedAt,omitempty"`
+	PodScheduledAt          *time.Time `json:"podScheduledAt,omitempty"`
+	ImagePullStartedAt      *time.Time `json:"imagePullStartedAt,omitempty"`
+	ImagePulledAt           *time.Time `json:"imagePulledAt,omitempty"`
+	ContainerCreatedAt      *time.Time `json:"containerCreatedAt,omitempty"`
+	ContainerStartedAt      *time.Time `json:"containerStartedAt,omitempty"`
+	PodReadyAt              *time.Time `json:"podReadyAt,omitempty"`
+	ServiceEndpointsReadyAt *time.Time `json:"serviceEndpointsReadyAt,omitempty"`
+	// FirstAPIStatusSuccessAt is read off the Pod's own Ready condition transition time:
+	// the readinessProbe hits the same /api/status path checkInstanceHealth does (see
+	// charts/hermes-agent/values.yaml probes.readiness), so "Pod went Ready" and "the
+	// app first answered /api/status with 2xx" are the same event, not two separate
+	// signals that can silently disagree.
+	FirstAPIStatusSuccessAt *time.Time `json:"firstApiStatusSuccessAt,omitempty"`
+
+	ScheduleSeconds       *float64 `json:"scheduleSeconds,omitempty"`
+	ImagePullSeconds      *float64 `json:"imagePullSeconds,omitempty"`
+	ContainerStartSeconds *float64 `json:"containerStartSeconds,omitempty"`
+	AppBootSeconds        *float64 `json:"appBootSeconds,omitempty"`
+	ServiceReadySeconds   *float64 `json:"serviceReadySeconds,omitempty"`
+	TotalProvisionSeconds *float64 `json:"totalProvisionSeconds,omitempty"`
 }
 
 type PVCSummary struct {
@@ -34,6 +65,53 @@ type ServiceSummary struct {
 	Name         string  `json:"name"`
 	HasEndpoints bool    `json:"hasEndpoints"`
 	Ports        []int32 `json:"ports"`
+	// ReadyCount/NotReadyCount/Source make the diagnosis self-evident instead of a bare
+	// bool: e.g. "0 ready, 0 not-ready, source=endpointslice" vs "source=error" (a real
+	// failure to check, NOT the same thing as "checked and found nothing").
+	ReadyCount    int    `json:"readyCount"`
+	NotReadyCount int    `json:"notReadyCount"`
+	Source        string `json:"source"`
+}
+
+// endpointReadiness inspects EndpointSlices first (the modern API; what kube-proxy and
+// most CNIs actually consume) and falls back to the legacy Endpoints object only if no
+// EndpointSlice exists. Returns the source used and ready/not-ready address counts.
+// Critically, this surfaces lookup ERRORS distinctly from "no endpoints found" — a
+// previous version silently treated an RBAC 403 on Endpoints the same as "not ready",
+// which made the bridge's own ClusterRole missing the `endpoints` resource look like a
+// real pod health problem. See deploy/rbac.yaml.
+func (b *Bridge) endpointReadiness(ctx context.Context, ns, svcName string) (source string, ready, notReady int, err error) {
+	slices, sliceErr := b.KubeClient.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("kubernetes.io/service-name=%s", svcName),
+	})
+	if sliceErr == nil && len(slices.Items) > 0 {
+		for _, slice := range slices.Items {
+			for _, ep := range slice.Endpoints {
+				if ep.Conditions.Ready != nil && *ep.Conditions.Ready {
+					ready += len(ep.Addresses)
+				} else {
+					notReady += len(ep.Addresses)
+				}
+			}
+		}
+		return "endpointslice", ready, notReady, nil
+	}
+
+	ep, epErr := b.KubeClient.CoreV1().Endpoints(ns).Get(ctx, svcName, metav1.GetOptions{})
+	if epErr != nil {
+		// Both lookups failed — this is a genuine error (RBAC, network, wrong name),
+		// not "the pod isn't ready yet". Callers must not coerce this into hasEndpoints=false
+		// without surfacing it.
+		if sliceErr != nil {
+			return "error", 0, 0, fmt.Errorf("list endpointslices: %w; get endpoints: %v", sliceErr, epErr)
+		}
+		return "error", 0, 0, fmt.Errorf("get endpoints: %w", epErr)
+	}
+	for _, sub := range ep.Subsets {
+		ready += len(sub.Addresses)
+		notReady += len(sub.NotReadyAddresses)
+	}
+	return "endpoints", ready, notReady, nil
 }
 
 type LogsSummary struct {
@@ -84,6 +162,7 @@ func (b *Bridge) GetInstanceDiagnostics(ctx context.Context, instanceID string) 
 	}
 
 	// Service + endpoints summary
+	var serviceEndpointsReadyAt *time.Time
 	svcs, err := b.KubeClient.CoreV1().Services(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err == nil && len(svcs.Items) > 0 {
 		svc := svcs.Items[0]
@@ -91,27 +170,29 @@ func (b *Bridge) GetInstanceDiagnostics(ctx context.Context, instanceID string) 
 		for _, p := range svc.Spec.Ports {
 			ports = append(ports, p.Port)
 		}
-		hasEndpoints := false
-		ep, epErr := b.KubeClient.CoreV1().Endpoints(ns).Get(ctx, svc.Name, metav1.GetOptions{})
-		if epErr == nil {
-			for _, sub := range ep.Subsets {
-				if len(sub.Addresses) > 0 {
-					hasEndpoints = true
-					break
-				}
-			}
+		source, ready, notReady, readinessErr := b.endpointReadiness(ctx, ns, svc.Name)
+		if readinessErr != nil {
+			// Surface the failure in the log — a 403 here means the bridge's own
+			// ClusterRole is missing the endpoints/endpointslices grant (deploy/rbac.yaml),
+			// which is a platform bug, not "the instance isn't ready".
+			b.Logger.Printf("[GetInstanceDiagnostics] Warning: endpoint readiness check failed for %s/%s: %v", ns, svc.Name, readinessErr)
 		}
 		out.Service = &ServiceSummary{
-			Name:         svc.Name,
-			HasEndpoints: hasEndpoints,
-			Ports:        ports,
+			Name:          svc.Name,
+			HasEndpoints:  ready > 0,
+			Ports:         ports,
+			ReadyCount:    ready,
+			NotReadyCount: notReady,
+			Source:        source,
 		}
+		serviceEndpointsReadyAt = endpointsLastChangeTriggerTime(b.endpointsAnnotations(ctx, ns, svc.Name))
 	}
 
 	// Pod logs — current and previous crash (best-effort, non-fatal)
+	var pod *corev1.Pod
 	pods, _ := b.KubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if pods != nil && len(pods.Items) > 0 {
-		pod := selectPod(pods.Items)
+		pod = selectPod(pods.Items)
 		if pod == nil {
 			pod = &pods.Items[0]
 		}
@@ -130,6 +211,18 @@ func (b *Bridge) GetInstanceDiagnostics(ctx context.Context, instanceID string) 
 		events = []InstanceEvent{}
 	}
 	out.Events = events
+
+	out.Timeline = buildProvisionTimeline(pod, events, serviceEndpointsReadyAt)
+	b.Logger.Printf(
+		"[GetInstanceDiagnostics] %s timeline: scheduleSeconds=%s imagePullSeconds=%s containerStartSeconds=%s appBootSeconds=%s serviceReadySeconds=%s totalProvisionSeconds=%s",
+		instanceID,
+		formatSecondsForLog(out.Timeline.ScheduleSeconds),
+		formatSecondsForLog(out.Timeline.ImagePullSeconds),
+		formatSecondsForLog(out.Timeline.ContainerStartSeconds),
+		formatSecondsForLog(out.Timeline.AppBootSeconds),
+		formatSecondsForLog(out.Timeline.ServiceReadySeconds),
+		formatSecondsForLog(out.Timeline.TotalProvisionSeconds),
+	)
 
 	pvcBound := out.PVC != nil && strings.EqualFold(out.PVC.Phase, "Bound")
 	svcHasEndpoints := out.Service != nil && out.Service.HasEndpoints
@@ -246,5 +339,139 @@ func recommendAction(status InstanceStatus, pvcBound, serviceHasEndpoints bool) 
 	}
 
 	return "Check logs and events for more details; use POST /v1/instances/{id}/repair if degraded"
+}
+
+// endpointsAnnotations fetches the Endpoints object's annotations purely to read
+// "endpoints.kubernetes.io/last-change-trigger-time" — the timestamp Kubernetes itself
+// stamps whenever the object's ready addresses last changed. Best-effort: returns nil
+// on any error rather than failing the whole diagnostics call over a timing nice-to-have.
+func (b *Bridge) endpointsAnnotations(ctx context.Context, ns, svcName string) map[string]string {
+	ep, err := b.KubeClient.CoreV1().Endpoints(ns).Get(ctx, svcName, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	return ep.Annotations
+}
+
+func endpointsLastChangeTriggerTime(annotations map[string]string) *time.Time {
+	raw, ok := annotations["endpoints.kubernetes.io/last-change-trigger-time"]
+	if !ok || raw == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
+// eventTimeByReason finds the earliest FirstTime (if earliest=true) or latest LastTime
+// across events matching reason, optionally restricted to events whose Message mentions
+// containerName (multi-container pods emit one Pulling/Pulled/Created/Started event per
+// container, sharing the same Reason — without the message filter we'd conflate the init
+// containers' timings with the main runtime container's).
+func eventTimeByReason(events []InstanceEvent, reason, containerName string, earliest bool) *time.Time {
+	var best *time.Time
+	for i := range events {
+		e := &events[i]
+		if e.Reason != reason {
+			continue
+		}
+		if containerName != "" && !strings.Contains(e.Message, containerName) {
+			continue
+		}
+		candidate := e.LastTime
+		if earliest {
+			candidate = e.FirstTime
+		}
+		if candidate.IsZero() {
+			continue
+		}
+		if best == nil || (earliest && candidate.Before(*best)) || (!earliest && candidate.After(*best)) {
+			best = &candidate
+		}
+	}
+	return best
+}
+
+func formatSecondsForLog(v *float64) string {
+	if v == nil {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1fs", *v)
+}
+
+func secondsBetween(start, end *time.Time) *float64 {
+	if start == nil || end == nil {
+		return nil
+	}
+	d := end.Sub(*start).Seconds()
+	if d < 0 {
+		return nil
+	}
+	return &d
+}
+
+func podConditionTime(pod *corev1.Pod, conditionType corev1.PodConditionType) *time.Time {
+	if pod == nil {
+		return nil
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == conditionType && c.Status == corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
+			t := c.LastTransitionTime.Time
+			return &t
+		}
+	}
+	return nil
+}
+
+// buildProvisionTimeline is pure (no I/O) so it's directly unit-testable: feed it a pod
+// + event list + an optional endpoints-readiness timestamp and get back exactly the
+// breakdown described in the startup-instrumentation spec, with nil for any phase that
+// hasn't happened (or wasn't observable) rather than a misleading zero duration.
+func buildProvisionTimeline(pod *corev1.Pod, events []InstanceEvent, serviceEndpointsReadyAt *time.Time) ProvisionTimeline {
+	tl := ProvisionTimeline{ServiceEndpointsReadyAt: serviceEndpointsReadyAt}
+	if pod == nil {
+		return tl
+	}
+
+	created := pod.CreationTimestamp.Time
+	if !created.IsZero() {
+		tl.PodCreatedAt = &created
+	}
+
+	mainContainer := ""
+	if len(pod.Spec.Containers) > 0 {
+		mainContainer = pod.Spec.Containers[0].Name
+	}
+
+	tl.PodScheduledAt = podConditionTime(pod, corev1.PodScheduled)
+	if tl.PodScheduledAt == nil {
+		tl.PodScheduledAt = eventTimeByReason(events, "Scheduled", "", true)
+	}
+
+	// Pulling/Pulled fire once per container (init containers included) — use the
+	// overall earliest Pulling and latest Pulled to represent the pod's full image-pull
+	// phase, since a slow init-container pull delays the main container just as much.
+	tl.ImagePullStartedAt = eventTimeByReason(events, "Pulling", "", true)
+	tl.ImagePulledAt = eventTimeByReason(events, "Pulled", "", false)
+
+	tl.ContainerCreatedAt = eventTimeByReason(events, "Created", mainContainer, true)
+	tl.ContainerStartedAt = eventTimeByReason(events, "Started", mainContainer, true)
+
+	// The Pod's Ready condition is driven by the readinessProbe, which hits the same
+	// /api/status path checkInstanceHealth does — so this is also the first time the
+	// app answered a real request, not just "the process is running".
+	tl.PodReadyAt = podConditionTime(pod, corev1.PodReady)
+	tl.FirstAPIStatusSuccessAt = tl.PodReadyAt
+
+	tl.ScheduleSeconds = secondsBetween(tl.PodCreatedAt, tl.PodScheduledAt)
+	tl.ImagePullSeconds = secondsBetween(tl.ImagePullStartedAt, tl.ImagePulledAt)
+	tl.ContainerStartSeconds = secondsBetween(tl.ContainerCreatedAt, tl.ContainerStartedAt)
+	tl.AppBootSeconds = secondsBetween(tl.ContainerStartedAt, tl.PodReadyAt)
+	tl.ServiceReadySeconds = secondsBetween(tl.PodReadyAt, tl.ServiceEndpointsReadyAt)
+	tl.TotalProvisionSeconds = secondsBetween(tl.PodCreatedAt, tl.PodReadyAt)
+
+	return tl
 }
 

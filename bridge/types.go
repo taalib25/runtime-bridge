@@ -335,6 +335,26 @@ type InstanceStatus struct {
 	SelectorLabels    map[string]string `json:"selectorLabels,omitempty"`
 	CommonLabels      map[string]string `json:"commonLabels,omitempty"`
 	CommonAnnotations map[string]string `json:"commonAnnotations,omitempty"`
+	// DetailedPhase is a finer-grained progression than Phase, for callers that want
+	// to distinguish "still pulling the image" from "container up, app booting" instead
+	// of one opaque "starting". Purely additive — Phase keeps its existing values and
+	// remains what terminalSuccess/terminalFailure decisions are based on, so nothing
+	// that already reads Phase needs to change. One of: pod_pending, pod_scheduled,
+	// pulling_image, image_pulled, container_creating, container_started, app_starting,
+	// runtime_healthy — or it mirrors Phase verbatim for failed/error/deleted/deleting.
+	DetailedPhase string `json:"detailedPhase,omitempty"`
+	// LatestEventReason/Message/Timestamp surface the single most recent Kubernetes
+	// event for this pod, so a caller doesn't have to fetch the full event list just to
+	// answer "what's it doing right now".
+	LatestEventReason    string     `json:"latestEventReason,omitempty"`
+	LatestEventMessage   string     `json:"latestEventMessage,omitempty"`
+	LatestEventTimestamp *time.Time `json:"latestEventTimestamp,omitempty"`
+	NodeName              string     `json:"nodeName,omitempty"`
+	PodName               string     `json:"podName,omitempty"`
+	// ImageID is the node's resolved image reference (usually includes the digest the
+	// node actually pulled/cached), distinct from Spec.Image/ImageTag which is what was
+	// *requested* — useful for confirming a pre-pulled digest was actually reused.
+	ImageID string `json:"imageId,omitempty"`
 }
 
 type Instance struct {

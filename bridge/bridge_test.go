@@ -625,21 +625,50 @@ func TestBuildValues_ImageSplitWithTag(t *testing.T) {
 	}
 }
 
-func TestBuildValues_ImageTagOverride(t *testing.T) {
+// When the image/tag match the bridge's own defaults, buildValues prefers the pinned
+// digest over the floating ":latest" tag — that's the whole point of pinning it.
+func TestBuildValues_DefaultImageUsesPinnedDigest(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
 		TenantID:    "t1",
-		Image:       "nousresearch/hermes-agent",
-		ImageTag:    "latest",
+		Image:       b.Config.RuntimeNodeCoreImage,
+		ImageTag:    b.Config.RuntimeNodeCoreImageTag,
 	}
 	vals, err := b.buildValues(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	img := vals["image"].(map[string]any)
-	if img["tag"] != "latest" {
-		t.Errorf("expected latest tag, got %v", img["tag"])
+	if img["digest"] != b.Config.RuntimeNodeCoreImageDigest {
+		t.Errorf("expected pinned digest %v, got %v", b.Config.RuntimeNodeCoreImageDigest, img["digest"])
+	}
+	if img["tag"] != nil {
+		t.Errorf("expected no tag when digest is pinned, got %v", img["tag"])
+	}
+}
+
+// A genuinely custom per-instance tag (different from the bridge's default) must
+// still win over the digest — a pin is a promise about the DEFAULT image, not a
+// blanket override of every instance's explicit choice.
+func TestBuildValues_ImageTagOverride(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{
+		InstanceID: "ws-1",
+		TenantID:    "t1",
+		Image:       "nousresearch/hermes-agent",
+		ImageTag:    "v2026.6.5",
+	}
+	vals, err := b.buildValues(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := vals["image"].(map[string]any)
+	if img["tag"] != "v2026.6.5" {
+		t.Errorf("expected v2026.6.5 tag, got %v", img["tag"])
+	}
+	if img["digest"] != nil {
+		t.Errorf("expected no digest for an explicit custom tag, got %v", img["digest"])
 	}
 }
 

@@ -352,6 +352,20 @@ jobs:
         run: |
           kubectl rollout status deployment/hermes-bridge -n "$BRIDGE_NAMESPACE" --timeout=180s
 
+      - name: Apply image pre-puller
+        working-directory: ${{ github.workspace }}
+        run: |
+          # Single source of truth for the pinned digest is bridge_config.go's default —
+          # extracted here rather than duplicated, so the pre-puller can never silently
+          # cache a different image than what instances actually run.
+          DIGEST=$(grep -oE 'RuntimeNodeCoreImageDigest:\s*"sha256:[a-f0-9]{64}"' bridge/bridge_config.go | grep -oE 'sha256:[a-f0-9]{64}')
+          if [ -z "$DIGEST" ]; then
+            echo "::warning::RuntimeNodeCoreImageDigest is empty — skipping pre-puller apply (nothing to pin it to)"
+            exit 0
+          fi
+          sed "s/REPLACE_WITH_IMMUTABLE_DIGEST/$DIGEST/g" deploy/runtime-image-prepuller.yaml | kubectl apply -f -
+          kubectl rollout status daemonset/hermes-runtime-image-prepuller -n hermes-system --timeout=180s
+
   validate-cluster:
     name: Validate cluster — ${{ inputs.cluster_id }}
     needs: bridge-deploy
@@ -466,7 +480,7 @@ jobs:
         # Endpoint: POST https://api.hermeshq.net/api/admin/clusters
         # Auth:     Authorization: Bearer <ADMIN_API_SECRET>  (repo-level secret)
         # Body:     cluster_id, bridge_url, bridge_secret (encrypted + stored by backend),
-        #           status ("maintenance" so admin must explicitly activate)
+        #           runtime_base_domain, status ("draining" so admin must smoke-test before promoting)
         # Idempotent: upserts on cluster_id — safe to re-run.
         env:
           BRIDGE_URL: ${{ needs.bridge-deploy.outputs.bridge_url }}
@@ -488,17 +502,18 @@ jobs:
             -H "Authorization: Bearer $ADMIN_API_SECRET" \
             -H "Content-Type: application/json" \
             -d "{
-              \"cluster_id\":    \"${{ inputs.cluster_id }}\",
-              \"bridge_url\":    \"$BRIDGE_URL\",
-              \"bridge_secret\": \"$BRIDGE_SECRET\",
-              \"region\":        \"eu\",
-              \"status\":        \"maintenance\"
+              \"cluster_id\":           \"${{ inputs.cluster_id }}\",
+              \"bridge_url\":           \"$BRIDGE_URL\",
+              \"bridge_secret\":        \"$BRIDGE_SECRET\",
+              \"runtime_base_domain\":  \"$RUNTIME_BASE_DOMAIN\",
+              \"region\":               \"eu\",
+              \"status\":               \"draining\"
             }")
 
           echo "HTTP $HTTP_CODE — response body:"
           cat /tmp/register-resp.json
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "✅ Cluster registered (status=maintenance) — promote to active via admin API when ready"
+            echo "✅ Cluster registered (status=draining) — smoke-test, then promote to active via admin API"
           else
             echo "❌ Registration returned HTTP $HTTP_CODE"
             exit 1
@@ -517,4 +532,4 @@ jobs:
           echo "| Bridge URL | \`$BRIDGE_URL\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Ingress IP | \`$INGRESS_IP\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Runtime domain | \`$RUNTIME_BASE_DOMAIN\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Bridge status | maintenance (promote via admin API when ready) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Bridge status | draining (smoke-test, then promote to active via admin API) |" >> "$GITHUB_STEP_SUMMARY"

@@ -28,6 +28,24 @@ type ClusterSummaryResponse struct {
 	// over-committed. Backend should exclude clusters where HeadroomMiB < 512
 	// (one instance memory request) from routing.
 	HeadroomMiB         int64         `json:"headroomMiB"`
+	// RuntimeNodesTotal/RuntimeNodesReady and the Prepuller* fields are all read
+	// directly off the hermes-runtime-image-prepuller DaemonSet's own status — not a
+	// separate count — so "how many runtime nodes are there" and "how many have the
+	// image cached" can never drift apart from what the DaemonSet itself believes.
+	// All zero/empty when the DaemonSet hasn't been deployed yet (e.g. an older
+	// cluster, or a deploy that predates Step 4) — that's a real "not warmed" signal,
+	// not an error.
+	RuntimeNodesTotal      int    `json:"runtimeNodesTotal"`
+	RuntimeNodesReady      int    `json:"runtimeNodesReady"`
+	PrepullerDesired       int    `json:"prepullerDesired"`
+	PrepullerReady         int    `json:"prepullerReady"`
+	PrepullerUnavailable   int    `json:"prepullerUnavailable"`
+	RuntimeImageReference  string `json:"runtimeImageReference,omitempty"`
+	// RuntimeImageWarmed is true only when every node the pre-puller targets has it
+	// cached (prepullerReady == prepullerDesired, and desired > 0). Backends should
+	// prefer routing creates to clusters where this is true and avoid placing the
+	// FIRST instance on a cluster where it's false — see docs on warm-node validation.
+	RuntimeImageWarmed bool `json:"runtimeImageWarmed"`
 }
 
 // MaintenanceModeResponse is the payload for GET/PUT /v1/cluster/maintenance.
@@ -166,6 +184,18 @@ func (b *Bridge) GetClusterSummary(ctx context.Context) (ClusterSummaryResponse,
 			}
 		}
 		out.HeadroomMiB = allocatableMiB - systemOverheadMiB - out.Resources.ReservedMemoryMiB
+	}
+
+	if ds, dsErr := b.KubeClient.AppsV1().DaemonSets("hermes-system").Get(ctx, "hermes-runtime-image-prepuller", metav1.GetOptions{}); dsErr == nil {
+		out.RuntimeNodesTotal = int(ds.Status.DesiredNumberScheduled)
+		out.RuntimeNodesReady = int(ds.Status.NumberReady)
+		out.PrepullerDesired = int(ds.Status.DesiredNumberScheduled)
+		out.PrepullerReady = int(ds.Status.NumberReady)
+		out.PrepullerUnavailable = int(ds.Status.NumberUnavailable)
+		if len(ds.Spec.Template.Spec.Containers) > 0 {
+			out.RuntimeImageReference = ds.Spec.Template.Spec.Containers[0].Image
+		}
+		out.RuntimeImageWarmed = out.PrepullerDesired > 0 && out.PrepullerReady == out.PrepullerDesired
 	}
 
 	return out, nil

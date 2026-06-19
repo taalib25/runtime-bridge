@@ -96,6 +96,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-data" (include "hermes-agent.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+Image reference — prefers an immutable digest over a floating tag when set, so
+IfNotPresent caching/pre-pulling actually hits across releases. See the bridge's
+RuntimeNodeCoreImageDigest (bridge/bridge_config.go) for where this gets pinned.
+*/}}
+{{- define "hermes-agent.image" -}}
+{{- if .Values.image.digest -}}
+{{ .Values.image.repository }}@{{ .Values.image.digest }}
+{{- else -}}
+{{ .Values.image.repository }}{{ if .Values.image.tag }}:{{ .Values.image.tag }}{{ end }}
+{{- end -}}
+{{- end -}}
+
 {{- define "hermes-agent.servicePorts" -}}
 {{- $ports := list -}}
 {{- if gt (len .Values.service.ports) 0 -}}

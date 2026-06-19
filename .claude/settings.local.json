@@ -31,7 +31,26 @@
       "Bash(gh run *)",
       "Bash(go test *)",
       "Bash(go build *)",
-      "Bash(rtk git *)"
+      "Bash(rtk git *)",
+      "Bash(rtk grep *)",
+      "Read(//home/taalib/projects/hermes-hut/**)",
+      "Bash(/home/taalib/projects/hermes-hut/node_modules/.bun/typescript@6.0.3/node_modules/typescript/bin/tsc --noEmit -p apps/admin/tsconfig.json)",
+      "Bash(rtk read *)",
+      "Bash(rtk tsc *)",
+      "Bash(rtk gh *)",
+      "WebFetch(domain:www.doppler.com)",
+      "Bash(rtk npx *)",
+      "Bash(node_modules/.bin/wrangler tail *)",
+      "Bash(echo \"TAIL_PID=$!\")",
+      "Read(//tmp/**)",
+      "Bash(bunx tsc *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(rtk find *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('workspaces', d\\), indent=2\\)[:500]\\)\")",
+      "Bash(rtk ls *)",
+      "Bash(node_modules/.bin/wrangler deploy *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(rtk proxy *)"
     ]
   }
 }

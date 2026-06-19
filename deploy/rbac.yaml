@@ -18,6 +18,17 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
+  # Read-only: the bridge never creates/manages Endpoints/EndpointSlices itself (they're
+  # auto-populated by the Service/EndpointSlice controllers) — only diagnoses them.
+  # Missing "endpoints" here silently breaks hasEndpoints diagnostics with a swallowed
+  # 403, not a visible error, since Get()/List() calls just return an error the caller
+  # treats as "no endpoints" instead of "couldn't check".
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

@@ -1,0 +1,49 @@
+# Keeps the hermes-agent runtime image cached on every node so creating a new instance
+# never has to cold-pull it — see docs on the warm-create benchmark for the SLO this
+# exists to hit (warm-node: pod ready end-to-end in well under 60s).
+#
+# Image is substituted at deploy time (see provision-runtime-cluster.yml's "Apply image
+# pre-puller" step) from the SAME digest bridge_config.go pins
+# (RuntimeNodeCoreImageDigest) — never hand-edit REPLACE_WITH_IMMUTABLE_DIGEST directly,
+# or this and the actual runtime image can silently drift apart and the pre-pull stops
+# doing anything useful.
+#
+# No nodeSelector: kube-hetzner clusters don't yet label a dedicated "runtime worker"
+# node pool (kh-test is single-node with no agent_nodepools at all — see
+# infra/kube-hetzner/modules/runtime-cluster/main.tf). Once a production cluster adds a
+# real runtime worker pool with its own node-role label, scope this with a nodeSelector
+# so it doesn't waste a pull on control-plane/system nodes that never run tenant pods.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hermes-runtime-image-prepuller
+  namespace: hermes-system
+  labels:
+    app: hermes-runtime-image-prepuller
+spec:
+  selector:
+    matchLabels:
+      app: hermes-runtime-image-prepuller
+  template:
+    metadata:
+      labels:
+        app: hermes-runtime-image-prepuller
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: prepull
+          image: nousresearch/hermes-agent@REPLACE_WITH_IMMUTABLE_DIGEST
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "sleep 365d"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 20m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

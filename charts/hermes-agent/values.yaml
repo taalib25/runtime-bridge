@@ -394,25 +394,36 @@ pdb:
 #     httpGet:
 #       path: /health
 #       port: api-server
-# Default probes: TCP on the dashboard port (9119), which `hermes dashboard` binds.
-# Robust without knowing the HTTP health path. Generous delays cover the first-boot web-UI
-# build/seed + lazy adapter/MCP installs. Override per docs/hermes-runtime-migration-plan.md.
+# startupProbe owns the slow-boot grace period (up to failureThreshold * periodSeconds =
+# 120s) so liveness/readiness don't need a huge initialDelaySeconds of their own — k8s
+# doesn't even evaluate liveness/readiness until startupProbe succeeds once. All three
+# hit the same /api/status path the bridge's own checkInstanceHealth uses (bridge/status.go),
+# so "k8s says Ready" and "bridge says healthy" are the same signal, not two probes that
+# can silently disagree (a TCP check passes the instant the port opens, well before the
+# app can actually serve a request — that gap is what made pods look "Ready" while still
+# unable to answer anything).
 probes:
-  readiness:
-    tcpSocket:
+  startup:
+    httpGet:
+      path: /api/status
       port: 9119
-    initialDelaySeconds: 20
+    periodSeconds: 2
+    timeoutSeconds: 5
+    failureThreshold: 60
+  readiness:
+    httpGet:
+      path: /api/status
+      port: 9119
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 3
+  liveness:
+    httpGet:
+      path: /api/status
+      port: 9119
     periodSeconds: 10
     timeoutSeconds: 5
-    failureThreshold: 12
-  liveness:
-    tcpSocket:
-      port: 9119
-    initialDelaySeconds: 120
-    periodSeconds: 20
-    timeoutSeconds: 5
-    failureThreshold: 6
-  startup: {}
+    failureThreshold: 3
 
 npmPackages: []
 

@@ -364,6 +364,17 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 	if tag == "" {
 		tag = splitTag
 	}
+	// Prefer the pinned digest over the floating tag, but only when nothing per-instance
+	// overrode the default image/tag — a digest is a promise about THIS specific image,
+	// so an explicit custom image/tag must win instead of silently being replaced.
+	imageValues := map[string]any{"repository": repository}
+	if b.Config.RuntimeNodeCoreImageDigest != "" &&
+		repository == b.Config.RuntimeNodeCoreImage &&
+		tag == b.Config.RuntimeNodeCoreImageTag {
+		imageValues["digest"] = b.Config.RuntimeNodeCoreImageDigest
+	} else {
+		imageValues["tag"] = tag
+	}
 
 	values := map[string]any{
 		"fullnameOverride": b.releaseName(spec.InstanceID),
@@ -371,10 +382,7 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		"strategy": map[string]any{
 			"type": "Recreate",
 		},
-		"image": map[string]any{
-			"repository": repository,
-			"tag":        tag,
-		},
+		"image": imageValues,
 		// bootstrap.overwrite controls whether the init container forcefully overwrites
 		// HERMES_HOME/config.yaml on every pod start.
 		//

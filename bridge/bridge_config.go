@@ -45,6 +45,13 @@ type Config struct {
 	// RuntimeNodeCoreImageTag is the default image tag for runtimeMode=runtime-node-core.
 	// Env: BRIDGE_RUNTIME_NODE_CORE_TAG
 	RuntimeNodeCoreImageTag string `json:"runtimeNodeCoreImageTag" yaml:"runtimeNodeCoreImageTag"`
+	// RuntimeNodeCoreImageDigest pins the runtime image by content digest (sha256:...)
+	// instead of by tag, for reproducibility and so IfNotPresent caching/pre-pulling
+	// actually hits — a floating "latest" tag means a fresh push upstream invalidates
+	// every node's cache silently. When set, this takes precedence over
+	// RuntimeNodeCoreImageTag in the Helm values passed to the chart.
+	// Env: BRIDGE_RUNTIME_NODE_CORE_DIGEST
+	RuntimeNodeCoreImageDigest string `json:"runtimeNodeCoreImageDigest" yaml:"runtimeNodeCoreImageDigest"`
 	ConfigFile string `json:"-" yaml:"-"`
 }
 
@@ -66,8 +73,13 @@ func DefaultConfig() Config {
 		RuntimeNodeCoreImage: "nousresearch/hermes-agent",
 		// Official upstream image. It ships the web dashboard as the `hermes dashboard`
 		// subcommand (port 9119), runs as root under tini (no s6), HERMES_HOME=/opt/data.
-		// Consider pinning a CalVer tag (e.g. v2026.6.5) + digest for reproducibility (Phase 0b).
 		RuntimeNodeCoreImageTag: "latest",
+		// Pinned to what `nousresearch/hermes-agent:latest` resolved to as of 2026-06-18
+		// (resolved via the Docker Hub registry API). Upstream publishes no versioned
+		// tags, so this is the only way to get reproducibility + working IfNotPresent
+		// caching/pre-pulling. Re-resolve and bump deliberately when upstream updates —
+		// never let this silently drift by removing it.
+		RuntimeNodeCoreImageDigest: "sha256:be6912a818cb4a479fa384024a599fee6796d56d1e6a5ca56834deec328d9981",
 	}
 }
 
@@ -98,6 +110,7 @@ func LoadConfig() (Config, error) {
 	overlayString(&cfg.DefaultDomain, "BRIDGE_DEFAULT_DOMAIN")
 	overlayString(&cfg.RuntimeNodeCoreImage, "BRIDGE_RUNTIME_NODE_CORE_IMAGE")
 	overlayString(&cfg.RuntimeNodeCoreImageTag, "BRIDGE_RUNTIME_NODE_CORE_TAG")
+	overlayString(&cfg.RuntimeNodeCoreImageDigest, "BRIDGE_RUNTIME_NODE_CORE_DIGEST")
 
 	if err := overlayDuration(&cfg.SyncInterval, "BRIDGE_SYNC_INTERVAL"); err != nil {
 		return Config{}, err

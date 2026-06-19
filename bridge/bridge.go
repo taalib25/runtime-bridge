@@ -37,7 +37,9 @@ const sharedSecretHeader = "X-Bridge-Secret"
 type Bridge struct {
 	Config         Config
 	HelmConfig     *action.Configuration
-	KubeClient     *kubernetes.Clientset
+	// kubernetes.Interface (not *kubernetes.Clientset) so tests can substitute
+	// k8s.io/client-go/kubernetes/fake — both implement it identically in production.
+	KubeClient     kubernetes.Interface
 	DynamicClient  dynamic.Interface
 	RESTConfig     *rest.Config
 	ClusterName    string

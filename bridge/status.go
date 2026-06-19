@@ -77,10 +77,17 @@ func (b *Bridge) collectInstanceStatus(ctx context.Context, spec InstanceSpec, r
 		status.Message = deploymentMessage(*dep)
 	}
 
-	if pod := selectPod(pods.Items); pod != nil {
+	var pod *corev1.Pod
+	if p := selectPod(pods.Items); p != nil {
+		pod = p
 		status.PodPhase = string(pod.Status.Phase)
 		status.WaitingReason = containerWaitingReason(pod)
 		status.RestartCount = podRestartCount(pod)
+		status.NodeName = pod.Spec.NodeName
+		status.PodName = pod.Name
+		if len(pod.Status.ContainerStatuses) > 0 {
+			status.ImageID = pod.Status.ContainerStatuses[0].ImageID
+		}
 		if oomKilled(pod) && status.WaitingReason == "" {
 			status.WaitingReason = "OOMKilled"
 		}
@@ -96,7 +103,64 @@ func (b *Bridge) collectInstanceStatus(ctx context.Context, spec InstanceSpec, r
 		status.Message = healthErr.Error()
 	}
 	status.Phase = derivePhase(status, healthErr)
+
+	// Best-effort: events power DetailedPhase + LatestEvent*. A failure here shouldn't
+	// fail the whole status call — it just means we fall back to the coarse Phase.
+	events, eventsErr := b.GetInstanceEvents(ctx, spec.InstanceID)
+	if eventsErr != nil {
+		b.Logger.Printf("[collectInstanceStatus] Warning: failed to fetch events for %s: %v", spec.InstanceID, eventsErr)
+	}
+	status.DetailedPhase = deriveDetailedPhase(status.Phase, pod, events)
+	if latest := latestEvent(events); latest != nil {
+		status.LatestEventReason = latest.Reason
+		status.LatestEventMessage = latest.Message
+		t := latest.LastTime
+		status.LatestEventTimestamp = &t
+	}
+
 	return status, nil
+}
+
+// deriveDetailedPhase refines the coarse Phase into the granular progression spelled
+// out in the startup-instrumentation spec, reusing the same event/condition parsing
+// buildProvisionTimeline already does — so "what phase is it in" and "how long did each
+// phase take" can never disagree, they're computed from the same inputs.
+func deriveDetailedPhase(coarsePhase string, pod *corev1.Pod, events []InstanceEvent) string {
+	switch coarsePhase {
+	case "failed", "error", "deleted", "deleting":
+		return coarsePhase
+	case "ready":
+		return "runtime_healthy"
+	}
+
+	tl := buildProvisionTimeline(pod, events, nil)
+	switch {
+	case tl.PodReadyAt != nil:
+		return "app_starting"
+	case tl.ContainerStartedAt != nil:
+		return "container_started"
+	case tl.ContainerCreatedAt != nil:
+		return "container_creating"
+	case tl.ImagePulledAt != nil:
+		return "image_pulled"
+	case tl.ImagePullStartedAt != nil:
+		return "pulling_image"
+	case tl.PodScheduledAt != nil:
+		return "pod_scheduled"
+	default:
+		return "pod_pending"
+	}
+}
+
+// latestEvent returns the event with the most recent LastTime, or nil if events is empty.
+func latestEvent(events []InstanceEvent) *InstanceEvent {
+	var latest *InstanceEvent
+	for i := range events {
+		if latest == nil || events[i].LastTime.After(latest.LastTime) {
+			latest = &events[i]
+		}
+	}
+	return latest
 }
 
 // containerWaitingReason returns the Waiting.Reason of the first container not

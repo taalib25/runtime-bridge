@@ -117,6 +117,26 @@ else
   FAILED=1
 fi
 
+# ── 7b. Warm-node status (informational — never fails the deploy) ───────────────
+# A fresh deploy's pre-puller hasn't had time to actually pull the image yet, so this
+# is reported, not enforced here. The backend is what actually gates "don't place the
+# first user on a cold node" — see cluster-scheduler.service.ts's runtimeImageWarmed
+# preference. This check exists so a human watching the deploy can see warm-up progress
+# instead of having to go dig through kubectl.
+WARM=$(echo "$SUMMARY" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(f\"warmed={d.get('runtimeImageWarmed')} prepuller={d.get('prepullerReady')}/{d.get('prepullerDesired')} unavailable={d.get('prepullerUnavailable')} image={d.get('runtimeImageReference','?')}\")
+except Exception as e:
+    print(f'parse error: {e}')
+" 2>/dev/null || echo "parse error")
+if echo "$WARM" | grep -q "warmed=True"; then
+  ok "warm-node: $WARM"
+else
+  echo -e "  ${YLW}[warn]${NC} warm-node: $WARM (not warmed yet — image still pulling, or pre-puller not deployed)"
+fi
+
 # ── 8. HTTPS via Cloudflare (if BRIDGE_DOMAIN set) ──────────────────────────────
 if [ -n "${BRIDGE_DOMAIN:-}" ]; then
   HTTPS_URL="https://$BRIDGE_DOMAIN"

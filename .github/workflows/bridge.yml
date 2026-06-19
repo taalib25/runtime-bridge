@@ -24,6 +24,19 @@ jobs:
       - name: Vet
         run: go vet ./bridge/...
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check runtime image pull policy and digest pin
+        run: |
+          pip install pyyaml
+          bash scripts/check-runtime-image-policy.sh
+
   build:
     name: Build bridge image
     needs: test
