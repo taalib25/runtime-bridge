@@ -345,7 +345,11 @@ networkPolicy:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: kube-system     # Traefik runs here on k3s
+              kubernetes.io/metadata.name: traefik          # Traefik's actual namespace on kh-test (k3s's bundled Traefik HelmChart installs here, NOT kube-system)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system      # kept in case a different cluster's Traefik runs here instead
     - from:
         - namespaceSelector:
             matchLabels:
