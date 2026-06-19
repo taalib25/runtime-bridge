@@ -93,3 +93,15 @@ jobs:
           else
             echo "no bridge pod found in this namespace"
           fi
+
+      - name: Traefik pods and recent logs (cluster-wide)
+        run: |
+          echo "===TRAEFIK PODS (kube-system)==="
+          kubectl get pod -n kube-system -l app.kubernetes.io/name=traefik -o wide || true
+          echo "===TRAEFIK RECENT LOGS==="
+          TPOD=$(kubectl get pod -n kube-system -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$TPOD" ]; then
+            kubectl logs -n kube-system "$TPOD" --tail=200 || true
+          else
+            echo "no traefik pod found in kube-system"
+          fi
