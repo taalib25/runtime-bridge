@@ -72,3 +72,8 @@ jobs:
         run: |
           echo "===DEPLOYMENT SELECTOR==="
           kubectl get deployment -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.selector}{"\n"}{end}' || true
+
+      - name: IngressRoute
+        run: |
+          echo "===INGRESSROUTE==="
+          kubectl get ingressroute -n "${{ inputs.namespace }}" -o yaml || true
