@@ -82,3 +82,13 @@ jobs:
         run: |
           echo "===POD IMAGES==="
           kubectl get pod -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}  {.name}: {.image} ({.imageID}){"\n"}{end}{"\n"}{end}' || true
+
+      - name: Live chart file on bridge pod
+        run: |
+          echo "===LIVE CHART FILE==="
+          POD=$(kubectl get pod -n "${{ inputs.namespace }}" -l app.kubernetes.io/name=hermes-bridge -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$POD" ]; then
+            kubectl exec -n "${{ inputs.namespace }}" "$POD" -- cat /charts/hermes-agent/templates/ingressroute.yaml 2>&1 || true
+          else
+            echo "no bridge pod found in this namespace"
+          fi
