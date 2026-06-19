@@ -5,8 +5,11 @@
   {{- $hosts = append $hosts .host }}
 {{- end }}
 {{- $hostMatch := "" }}
+{{- $acmeDomains := list }}
 {{- range $i, $h := $hosts }}
-  {{- if $i }}{{- $hostMatch = printf "%s || Host(`%s`)" $hostMatch $h }}
+  {{- if $i }}
+    {{- $hostMatch = printf "%s || Host(`%s`)" $hostMatch $h }}
+    {{- $acmeDomains = append $acmeDomains (dict "main" $h) }}
   {{- else }}{{- $hostMatch = printf "Host(`%s`)" $h }}
   {{- end }}
 {{- end }}
@@ -95,9 +98,21 @@ spec:
       services:
         - name: {{ $svcName }}
           port: {{ .Values.apiServer.port }}
+  {{- if .Values.ingressRoute.tls.certResolver }}
+    {{- if gt (len $acmeDomains) 0 }}
+  tls:
+    certResolver: {{ .Values.ingressRoute.tls.certResolver }}
+    domains:
+      {{- toYaml $acmeDomains | nindent 6 }}
+    {{- end }}
+    {{- /* No directly-reachable host beyond the canonical (Cloudflare-proxied) one —
+    ACME can never validate it, so tls is omitted entirely rather than requesting a
+    cert that will permanently fail. See bridge/ingressroute.go's acmeDomains. */}}
+  {{- else }}
   {{- with .Values.ingressRoute.tls }}
   tls:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 {{- end }}
 {{- end }}

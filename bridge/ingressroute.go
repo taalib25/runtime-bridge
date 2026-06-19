@@ -33,6 +33,24 @@ func hostMatchExpr(hosts []string) string {
 	return strings.Join(parts, " || ")
 }
 
+// acmeDomains returns the SNI names Traefik should actually request a Let's Encrypt cert
+// for. hosts[0] is always the canonical host (e.g. ws-id.hermeshq.net), which is Cloudflare-
+// proxied — Let's Encrypt's TLS-ALPN-01 challenge connects directly to the origin IP, so it
+// can never reach Traefik for that hostname (Cloudflare's edge answers instead), and bundling
+// it into the SAME multi-SAN request fails the WHOLE cert, not just that one name. Only the
+// directly-reachable hosts (e.g. the cluster-specific runtime host) can ever be validated.
+func acmeDomains(hosts []string) []any {
+	var domains []any
+	for _, h := range hosts[1:] {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		domains = append(domains, map[string]any{"main": h})
+	}
+	return domains
+}
+
 func (b *Bridge) resolveTraefikIngressRouteGVR() (schema.GroupVersionResource, error) {
 	discovery := b.KubeClient.Discovery()
 	for _, gvr := range traefikIngressRouteGVRs {
@@ -129,18 +147,26 @@ func (b *Bridge) EnsureIngressRoute(ctx context.Context, namespace string, hosts
 		},
 	}
 
+	spec := map[string]any{
+		"entryPoints": []any{"websecure"},
+		"routes":      routes,
+	}
+	// No directly-reachable host (e.g. cluster has no runtime base domain) — nothing for
+	// ACME to validate against, so omit tls and let Traefik fall back to its default cert
+	// rather than requesting (and permanently failing to renew) a cert no one can issue.
+	if domains := acmeDomains(hosts); len(domains) > 0 {
+		spec["tls"] = map[string]any{
+			"certResolver": "letsencrypt",
+			"domains":      domains,
+		}
+	}
+
 	obj := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": gvr.Group + "/" + gvr.Version,
 			"kind":       "IngressRoute",
-			"metadata": ingressRouteMetadata(namespace, namespace, lbls, anns),
-			"spec": map[string]any{
-				"entryPoints": []any{"websecure"},
-				"routes":      routes,
-				"tls": map[string]any{
-					"certResolver": "letsencrypt",
-				},
-			},
+			"metadata":   ingressRouteMetadata(namespace, namespace, lbls, anns),
+			"spec":       spec,
 		},
 	}
 
