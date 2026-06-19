@@ -105,3 +105,26 @@ jobs:
           if [ -n "$TPOD" ]; then
             kubectl get pod -n traefik "$TPOD" -o yaml | grep -A20 "args:" || true
           fi
+
+      - name: Instance pod env (names/refs only, never secret values)
+        run: |
+          echo "===INSTANCE POD ENV (env names + secretKeyRef refs, no literal secret values)==="
+          IPOD=$(kubectl get pod -n "${{ inputs.namespace }}" -l app.kubernetes.io/name=hermes-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$IPOD" ]; then
+            kubectl get pod -n "${{ inputs.namespace }}" "$IPOD" -o json | python3 -c "
+import json, sys
+pod = json.load(sys.stdin)
+for c in pod['spec']['containers']:
+    print(f\"-- container: {c['name']} --\")
+    for e in c.get('env', []):
+        if 'value' in e:
+            print(f\"  {e['name']} = {e['value']}\")
+        elif 'valueFrom' in e and 'secretKeyRef' in e['valueFrom']:
+            ref = e['valueFrom']['secretKeyRef']
+            print(f\"  {e['name']} <- secretKeyRef name={ref['name']} key={ref['key']}\")
+        else:
+            print(f\"  {e['name']} <- other valueFrom\")
+"
+          else
+            echo "no instance pod found"
+          fi
