@@ -88,7 +88,8 @@ jobs:
           echo "===LIVE CHART FILE==="
           POD=$(kubectl get pod -n "${{ inputs.namespace }}" -l app.kubernetes.io/name=hermes-bridge -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
           if [ -n "$POD" ]; then
-            kubectl exec -n "${{ inputs.namespace }}" "$POD" -- cat /charts/hermes-agent/templates/ingressroute.yaml 2>&1 || true
+            kubectl cp "${{ inputs.namespace }}/$POD:/charts/hermes-agent/templates/ingressroute.yaml" /tmp/live-ingressroute.yaml 2>&1 || true
+            cat /tmp/live-ingressroute.yaml 2>&1 || true
           else
             echo "no bridge pod found in this namespace"
           fi
