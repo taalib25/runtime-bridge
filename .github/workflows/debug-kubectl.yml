@@ -77,3 +77,8 @@ jobs:
         run: |
           echo "===INGRESSROUTE==="
           kubectl get ingressroute -n "${{ inputs.namespace }}" -o yaml || true
+
+      - name: Pod images
+        run: |
+          echo "===POD IMAGES==="
+          kubectl get pod -n "${{ inputs.namespace }}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}  {.name}: {.image} ({.imageID}){"\n"}{end}{"\n"}{end}' || true
