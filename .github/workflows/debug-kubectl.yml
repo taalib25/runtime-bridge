@@ -99,10 +99,9 @@ jobs:
           echo "===ALL PODS CLUSTER-WIDE (searching for traefik)==="
           kubectl get pod -A -o wide | grep -i traefik || true
           echo "===TRAEFIK RECENT LOGS==="
-          TNS=$(kubectl get pod -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' | grep -i traefik | head -1 | awk '{print $1}')
-          TPOD=$(kubectl get pod -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' | grep -i traefik | head -1 | awk '{print $2}')
+          kubectl logs -n traefik -l app.kubernetes.io/name=traefik --tail=300 || true
+          echo "===TRAEFIK ACME/CERT STORAGE==="
+          TPOD=$(kubectl get pod -n traefik -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
           if [ -n "$TPOD" ]; then
-            kubectl logs -n "$TNS" "$TPOD" --tail=200 || true
-          else
-            echo "no traefik pod found anywhere"
+            kubectl get pod -n traefik "$TPOD" -o yaml | grep -A20 "args:" || true
           fi
