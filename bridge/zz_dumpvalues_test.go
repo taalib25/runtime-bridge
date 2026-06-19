@@ -33,10 +33,8 @@ func TestDumpBridgeEmittedValues(t *testing.T) {
 		},
 		Secrets: map[string]string{},
 	}
-	// Mirror handlers_instance.go create flow: dashboard secrets injected pre-buildValues.
+	// Mirror handlers_instance.go create flow: secrets injected pre-buildValues.
 	spec.Secrets["API_SERVER_KEY"] = randomHex(24)
-	spec.Secrets["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"] = randomHex(24)
-	spec.Secrets["HERMES_DASHBOARD_BASIC_AUTH_SECRET"] = randomHex(32)
 
 	spec = b.normalizeInstanceSpec(spec)
 

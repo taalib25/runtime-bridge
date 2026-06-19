@@ -20,3 +20,8 @@ variable "cloudflare_zone_id" {
   type        = string
   sensitive   = true
 }
+
+variable "acme_email" {
+  description = "Email registered with Let's Encrypt for the Traefik 'letsencrypt' certificate resolver."
+  type        = string
+}

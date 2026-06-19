@@ -37,6 +37,18 @@ module "kube_hetzner" {
   # enables klipper LB, and allows scheduling on control plane automatically.
   ingress_controller = "traefik"
 
+  # Without this, every IngressRoute's `tls.certResolver: letsencrypt` (set by
+  # charts/hermes-agent/values.yaml) references a resolver Traefik never defined —
+  # Traefik logs "Router uses a nonexistent certificate resolver" and falls back to
+  # its self-signed default cert on every hostname. TLS-ALPN-01 (not HTTP-01) so it
+  # only needs port 443, already open — no port-80/web-entrypoint config required.
+  # Resolver name "letsencrypt" must exactly match the chart's certResolver value.
+  traefik_additional_options = [
+    "--certificatesresolvers.letsencrypt.acme.tlschallenge=true",
+    "--certificatesresolvers.letsencrypt.acme.email=${var.acme_email}",
+    "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json",
+  ]
+
   initial_k3s_channel       = var.initial_k3s_channel
   automatically_upgrade_k3s = var.automatically_upgrade_k3s
   automatically_upgrade_os  = var.automatically_upgrade_os

@@ -34,6 +34,7 @@ module "kh_test" {
   ssh_public_key     = var.ssh_public_key
   ssh_private_key    = var.ssh_private_key
   cloudflare_zone_id = var.cloudflare_zone_id
+  acme_email         = var.acme_email
 
   # Single cpx22 in fsn1 — kube-hetzner auto-enables klipper LB + scheduling on CP.
   server_type = "cpx22"

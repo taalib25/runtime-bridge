@@ -92,6 +92,7 @@ jobs:
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
           TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_acme_email:         "taalibazj@gmail.com"
           CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           tofu init \
@@ -106,6 +107,7 @@ jobs:
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
           TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_acme_email:         "taalibazj@gmail.com"
           CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
           HCLOUD_TOKEN:              ${{ secrets.HCLOUD_TOKEN }}
         run: |
@@ -140,6 +142,7 @@ jobs:
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
           TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_acme_email:         "taalibazj@gmail.com"
         run: tofu validate
 
       - name: tofu plan
@@ -149,6 +152,7 @@ jobs:
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
           TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_acme_email:         "taalibazj@gmail.com"
           CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: tofu plan -out=tfplan
 
@@ -207,6 +211,7 @@ jobs:
           TF_VAR_hcloud_token:       ${{ secrets.HCLOUD_TOKEN }}
           TF_VAR_ssh_private_key:    ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_acme_email:         "taalibazj@gmail.com"
           CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: tofu apply tfplan
 

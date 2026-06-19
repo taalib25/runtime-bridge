@@ -85,18 +85,6 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	apiKey := spec.Secrets["API_SERVER_KEY"]
 
-	// Dashboard basic-auth: the s6-supervised dashboard binds 0.0.0.0:9119 and FAILS CLOSED
-	// unless an auth provider is registered. Generate a per-tenant password + session secret
-	// so the basic-auth provider registers (username is set via env). Returned to the backend
-	// so it can surface the dashboard credentials to the tenant.
-	if spec.Secrets["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"] == "" {
-		spec.Secrets["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"] = randomHex(24)
-	}
-	if spec.Secrets["HERMES_DASHBOARD_BASIC_AUTH_SECRET"] == "" {
-		spec.Secrets["HERMES_DASHBOARD_BASIC_AUTH_SECRET"] = randomHex(32)
-	}
-	dashboardPassword := spec.Secrets["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"]
-
 	b.pendingCreates.Store(instanceID, pendingCreate{
 		apiKey: apiKey,
 		until:  time.Now().Add(b.Config.OperationTimeout),
@@ -114,8 +102,7 @@ func (b *Bridge) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		"url":          instanceURL(spec),
 		"dashboardUrl": dashboardURL(spec),
 		"secrets": map[string]string{
-			"API_SERVER_KEY":                       apiKey,
-			"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": dashboardPassword,
+			"API_SERVER_KEY": apiKey,
 		},
 	})
 }

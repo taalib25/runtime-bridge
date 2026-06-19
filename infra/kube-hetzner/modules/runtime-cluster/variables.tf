@@ -84,3 +84,8 @@ variable "automatically_upgrade_os" {
   type        = bool
   default     = false
 }
+
+variable "acme_email" {
+  description = "Email registered with Let's Encrypt for the Traefik 'letsencrypt' certificate resolver (expiry notices only, not public)."
+  type        = string
+}

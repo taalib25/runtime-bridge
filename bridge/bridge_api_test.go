@@ -378,24 +378,10 @@ func TestBuildValues_Env(t *testing.T) {
 	if _, ok := vals["extraEnv"]; ok {
 		t.Errorf("extraEnv (list-typed in the chart) must not be set as a map")
 	}
-	// The dashboard basic-auth username is the backend tenant identity (spec.TenantID),
-	// so the tenant logs in with the ID the backend knows them by. HOME/NPM_CONFIG_PREFIX
-	// are chart-owned, so they appear at render time, not in this bridge-built env map.
-	if env["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"] != "t1" {
-		t.Errorf("expected dashboard username = TenantID (t1), got %v", env["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"])
-	}
-}
-
-func TestBuildValues_DashboardUserFromTenantID(t *testing.T) {
-	b := newTestBridge("s")
-	spec := InstanceSpec{InstanceID: "ws-aabbccddeeff0011", TenantID: "acme-user-42", Image: "img"}
-	vals, err := b.buildValues(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	env := vals["env"].(map[string]string)
-	if env["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"] != "acme-user-42" {
-		t.Errorf("dashboard username should equal TenantID, got %q", env["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"])
+	// V1 access model: dashboard has no auth gate (HERMES_DASHBOARD_INSECURE=1). HOME/
+	// NPM_CONFIG_PREFIX are chart-owned, so they appear at render time, not in this map.
+	if env["HERMES_DASHBOARD_INSECURE"] != "1" {
+		t.Errorf("expected HERMES_DASHBOARD_INSECURE=1, got %v", env["HERMES_DASHBOARD_INSECURE"])
 	}
 }
 

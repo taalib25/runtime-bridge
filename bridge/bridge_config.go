@@ -24,9 +24,10 @@ type Config struct {
 	HealthPath        string        `json:"healthPath" yaml:"healthPath"`
 	ReleasePrefix     string        `json:"releasePrefix" yaml:"releasePrefix"`
 	CreateNamespace   bool          `json:"createNamespace" yaml:"createNamespace"`
-	// DefaultForwardAuthURL is applied to every workspace that doesn't set forwardAuthURL explicitly.
-	// Set to your backend's /auth/verify endpoint. Leave empty to disable ForwardAuth globally.
-	// Env: BRIDGE_FORWARD_AUTH_URL
+	// DefaultForwardAuthURL is configured (env: BRIDGE_FORWARD_AUTH_URL) but currently DEAD:
+	// nothing applies it to spec.ForwardAuthURL when a create request omits the field, so
+	// ForwardAuth only ever activates if the caller sets forwardAuthURL explicitly (apps/server
+	// doesn't, as of 2026-06-19). TODO: either wire this default in, or remove it.
 	DefaultForwardAuthURL string `json:"defaultForwardAuthURL" yaml:"defaultForwardAuthURL"`
 	// DefaultCORSOrigins is a comma-separated list of allowed browser origins applied to every
 	// workspace that doesn't set corsOrigins explicitly.
@@ -63,10 +64,10 @@ func DefaultConfig() Config {
 		ShutdownTimeout:         10 * time.Second,
 		HTTPClientTimeout:       5 * time.Second,
 		OperationTimeout:        10 * time.Minute,
-		// The Hermes dashboard's public (no-auth) liveness endpoint. It's in the dashboard's
-		// PUBLIC_API_PATHS allowlist, so the bridge health probe gets 200 even though the rest
-		// of the dashboard is behind basic-auth. (Plain /health 401s/404s → false unhealthy →
-		// would break status "ready" + auto-rollback restart/upgrade/repair/redeploy.)
+		// The Hermes dashboard's liveness endpoint (HERMES_DASHBOARD_INSECURE=1 means the
+		// whole dashboard is unauthenticated anyway, but this stays the canonical health
+		// path regardless). (Plain /health 401s/404s → false unhealthy → would break
+		// status "ready" + auto-rollback restart/upgrade/repair/redeploy.)
 		HealthPath:              "/api/status",
 		ReleasePrefix:           "",
 		CreateNamespace:         false,

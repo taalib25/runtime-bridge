@@ -579,29 +579,22 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		spec.EnvMap = map[string]string{}
 	}
 	// Non-secret runtime env (Nous docker docs):
-	//   HERMES_DASHBOARD=1                    → bring up the supervised dashboard s6 service
-	//                                           (binds 0.0.0.0:9119 by default).
-	//   HERMES_DASHBOARD_BASIC_AUTH_USERNAME  → the `basic` dashboard_auth provider registers
-	//                                           from this + _PASSWORD/_SECRET (instance Secret),
-	//                                           satisfying the auth gate on the non-loopback bind.
-	//   HERMES_UID/GID=1000                   → s6 stage2 remaps the in-image `hermes` user to
-	//                                           these before s6-setuidgid drops to it; == fsGroup
-	//                                           so the dropped process can write the PVC.
+	//   HERMES_DASHBOARD=1          → bring up the supervised dashboard s6 service
+	//                                 (binds 0.0.0.0:9119 by default).
+	//   HERMES_DASHBOARD_INSECURE=1 → V1 access model: public runtime URL → Traefik →
+	//                                 dashboard, no auth gate. Deliberately insecure —
+	//                                 platform auth/OIDC lands later, once routing/TLS
+	//                                 is stable. Anyone with the runtime URL has access.
+	//   HERMES_UID/GID=1000         → s6 stage2 remaps the in-image `hermes` user to
+	//                                 these before s6-setuidgid drops to it; == fsGroup
+	//                                 so the dropped process can write the PVC.
 	// Tool persistence is native: s6 sets subprocess HOME=/opt/data/home (on the PVC), so
 	// cargo/go/pip --user/gem/etc. persist. The chart adds NPM_CONFIG_PREFIX for `npm -g`.
-	//
-	// The dashboard basic-auth username is the backend-supplied tenant identity (spec.TenantID),
-	// so the tenant logs in with the same ID the backend knows them by. The backend may override
-	// it by sending HERMES_DASHBOARD_BASIC_AUTH_USERNAME in the spec env.
-	dashboardUser := spec.TenantID
-	if dashboardUser == "" {
-		dashboardUser = "tenant" // defensive fallback; TenantID is required + validated on create
-	}
 	hermesEnv := map[string]string{
-		"HERMES_DASHBOARD":                     "1",
-		"HERMES_DASHBOARD_BASIC_AUTH_USERNAME": dashboardUser,
-		"HERMES_UID":                           strconv.Itoa(fsGroupGID),
-		"HERMES_GID":                           strconv.Itoa(fsGroupGID),
+		"HERMES_DASHBOARD":          "1",
+		"HERMES_DASHBOARD_INSECURE": "1",
+		"HERMES_UID":                strconv.Itoa(fsGroupGID),
+		"HERMES_GID":                strconv.Itoa(fsGroupGID),
 	}
 	for k, v := range hermesEnv {
 		if _, exists := spec.EnvMap[k]; !exists {
