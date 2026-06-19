@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,6 +14,23 @@ import (
 var traefikIngressRouteGVRs = []schema.GroupVersionResource{
 	{Group: "traefik.io", Version: "v1alpha1", Resource: "ingressroutes"},
 	{Group: "traefik.containo.us", Version: "v1alpha1", Resource: "ingressroutes"},
+}
+
+// hostMatchExpr ORs every non-empty, de-duplicated host into a single Traefik match
+// expression. Panics-free on an empty slice (returns an empty string — callers always
+// pass at least the canonical host).
+func hostMatchExpr(hosts []string) string {
+	seen := make(map[string]bool, len(hosts))
+	var parts []string
+	for _, h := range hosts {
+		h = strings.TrimSpace(h)
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		parts = append(parts, fmt.Sprintf(`Host("%s")`, h))
+	}
+	return strings.Join(parts, " || ")
 }
 
 func (b *Bridge) resolveTraefikIngressRouteGVR() (schema.GroupVersionResource, error) {
@@ -58,7 +76,11 @@ func ingressRouteMetadata(name, namespace string, lbls, anns map[string]string) 
 	return meta
 }
 
-func (b *Bridge) EnsureIngressRoute(ctx context.Context, namespace, host, serviceName string, servicePort int, hasCORS, hasAuth bool, lbls, anns map[string]string) error {
+// EnsureIngressRoute creates or updates a Traefik IngressRoute for the workspace.
+// hosts[0] is the canonical host; any additional entries (e.g. the cluster-specific
+// host the public redirector sends browsers to) are OR'd into the same match rule so
+// one IngressRoute serves every hostname that should reach this instance.
+func (b *Bridge) EnsureIngressRoute(ctx context.Context, namespace string, hosts []string, serviceName string, servicePort int, hasCORS, hasAuth bool, lbls, anns map[string]string) error {
 	gvr, err := b.resolveTraefikIngressRouteGVR()
 	if err != nil {
 		return err
@@ -89,17 +111,18 @@ func (b *Bridge) EnsureIngressRoute(ctx context.Context, namespace, host, servic
 		"port": int64(servicePort),
 	}}
 
+	hostMatch := hostMatchExpr(hosts)
 	routes := []any{
 		map[string]any{
 			"kind":        "Rule",
-			"match":       fmt.Sprintf(`Host("%s") && Method("OPTIONS")`, host),
+			"match":       fmt.Sprintf(`(%s) && Method("OPTIONS")`, hostMatch),
 			"priority":    int64(100),
 			"middlewares": middlewaresOptions,
 			"services":    backend,
 		},
 		map[string]any{
 			"kind":        "Rule",
-			"match":       fmt.Sprintf(`Host("%s")`, host),
+			"match":       hostMatch,
 			"priority":    int64(1),
 			"middlewares": middlewaresAll,
 			"services":    backend,

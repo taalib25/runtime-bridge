@@ -126,8 +126,8 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 
 	if hasCORS || hasAuth {
 		// The main host routes to the dashboard (spec.RuntimePort = 9119).
-		host := spec.Network.host()
-		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth, b.instanceLabels(spec), b.instanceAnnotations(spec)); err != nil {
+		hosts := append([]string{spec.Network.host()}, spec.Network.AdditionalHosts...)
+		if err := b.EnsureIngressRoute(ctx, ns, hosts, ns, spec.RuntimePort, hasCORS, hasAuth, b.instanceLabels(spec), b.instanceAnnotations(spec)); err != nil {
 			b.Logger.Printf("[CreateInstance] Warning: failed to create IngressRoute: %v", err)
 		} else {
 			// Remove the Helm-managed Ingress so only IngressRoute routes this host.
@@ -287,8 +287,8 @@ func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*releas
 	}
 
 	if hasCORS || hasAuth {
-		host := spec.Network.host()
-		if err := b.EnsureIngressRoute(ctx, ns, host, ns, spec.RuntimePort, hasCORS, hasAuth, b.instanceLabels(spec), b.instanceAnnotations(spec)); err != nil {
+		hosts := append([]string{spec.Network.host()}, spec.Network.AdditionalHosts...)
+		if err := b.EnsureIngressRoute(ctx, ns, hosts, ns, spec.RuntimePort, hasCORS, hasAuth, b.instanceLabels(spec), b.instanceAnnotations(spec)); err != nil {
 			b.Logger.Printf("[UpdateInstance] Warning: failed to update IngressRoute: %v", err)
 		} else {
 			b.deleteHelmIngress(ctx, ns)
