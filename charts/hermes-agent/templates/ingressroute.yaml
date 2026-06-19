@@ -1,8 +1,14 @@
 {{- if not .Values.operator.enabled }}
 {{- if .Values.ingressRoute.enabled }}
-{{- $host := "" }}
+{{- $hosts := list }}
 {{- range .Values.ingress.hosts }}
-  {{- if not $host }}{{- $host = .host }}{{- end }}
+  {{- $hosts = append $hosts .host }}
+{{- end }}
+{{- $hostMatch := "" }}
+{{- range $i, $h := $hosts }}
+  {{- if $i }}{{- $hostMatch = printf "%s || Host(`%s`)" $hostMatch $h }}
+  {{- else }}{{- $hostMatch = printf "Host(`%s`)" $h }}
+  {{- end }}
 {{- end }}
 {{- $svcName := include "hermes-agent.fullname" . }}
 {{- $ns := .Release.Namespace }}
@@ -63,7 +69,7 @@ spec:
   routes:
     {{- if .Values.ingressRoute.cors.enabled }}
     - kind: Rule
-      match: Host({{ $host | quote }}) && Method("OPTIONS")
+      match: ({{ $hostMatch }}) && Method("OPTIONS")
       priority: 100
       middlewares:
         - name: workspace-cors
@@ -73,7 +79,7 @@ spec:
           port: {{ .Values.apiServer.port }}
     {{- end }}
     - kind: Rule
-      match: Host({{ $host | quote }})
+      match: {{ $hostMatch }}
       priority: 1
       {{- if or .Values.ingressRoute.cors.enabled .Values.ingressRoute.forwardAuth.enabled }}
       middlewares:

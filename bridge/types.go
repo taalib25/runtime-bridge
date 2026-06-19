@@ -295,6 +295,11 @@ type NetworkSpec struct {
 	IngressClassName string `json:"ingressClassName,omitempty"`
 	Scheme           string `json:"scheme,omitempty"`
 	HealthPath       string `json:"healthPath,omitempty"`
+	// AdditionalHosts are extra full hostnames (e.g. the cluster-specific
+	// ws-id.runtime-{clusterId}.{domain} the backend's public redirector sends browsers to)
+	// that should route to the same instance alongside Host. Unlike Host, these are never
+	// combined with Subdomain — pass full hostnames.
+	AdditionalHosts []string `json:"additionalHosts,omitempty"`
 }
 
 type EnvVar struct {

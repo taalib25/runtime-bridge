@@ -504,7 +504,7 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 	}
 	ingress["className"] = className
 	if host := strings.TrimSpace(spec.Network.host()); host != "" {
-		ingress["hosts"] = []map[string]any{{
+		hostEntries := []map[string]any{{
 			"host": host,
 			"paths": []map[string]any{{
 				"path":        spec.Network.path(),
@@ -512,6 +512,21 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 				"servicePort": spec.RuntimePort,
 			}},
 		}}
+		for _, additional := range spec.Network.AdditionalHosts {
+			additional = strings.TrimSpace(additional)
+			if additional == "" || additional == host {
+				continue
+			}
+			hostEntries = append(hostEntries, map[string]any{
+				"host": additional,
+				"paths": []map[string]any{{
+					"path":        spec.Network.path(),
+					"pathType":    "Prefix",
+					"servicePort": spec.RuntimePort,
+				}},
+			})
+		}
+		ingress["hosts"] = hostEntries
 	}
 	{
 		ns := spec.Namespace
