@@ -485,7 +485,8 @@ jobs:
         # Endpoint: POST https://api.hermeshq.net/api/admin/clusters
         # Auth:     Authorization: Bearer <ADMIN_API_SECRET>  (repo-level secret)
         # Body:     cluster_id, bridge_url, bridge_secret (encrypted + stored by backend),
-        #           runtime_base_domain, status ("draining" so admin must smoke-test before promoting)
+        #           runtime_base_domain, ingress_ip (target for per-instance Cloudflare DNS
+        #           A records), status ("draining" so admin must smoke-test before promoting)
         # Idempotent: upserts on cluster_id — safe to re-run.
         env:
           BRIDGE_URL: ${{ needs.bridge-deploy.outputs.bridge_url }}
@@ -511,6 +512,7 @@ jobs:
               \"bridge_url\":           \"$BRIDGE_URL\",
               \"bridge_secret\":        \"$BRIDGE_SECRET\",
               \"runtime_base_domain\":  \"$RUNTIME_BASE_DOMAIN\",
+              \"ingress_ip\":           \"$INGRESS_IP\",
               \"region\":               \"eu\",
               \"status\":               \"draining\"
             }")

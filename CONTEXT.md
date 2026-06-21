@@ -51,24 +51,38 @@ stable `id`, a `type`, and a `status` (`running | succeeded | failed | supersede
 backend's perspective.
 
 **Instance URL**
-The single canonical, publicly-addressable URL of an instance's web interface.
-Computed by the control plane from `{bridgeWorkspaceId}.{cluster.runtimeBaseDomain}`.
-Stable for the lifetime of the instance. Never constructed by the client — the client
-reads it verbatim from the API. One instance has exactly one Instance URL regardless
-of how many agents run inside it. Synonyms in legacy code (`dashboardUrl`, `runtimeUrl`,
+The single canonical, publicly-addressable URL shown to normal users:
+`https://{bridgeWorkspaceId}.{DOMAIN}` (e.g. `ws-abc123....hermeshq.net`) — the same
+domain for every instance, regardless of which cluster it runs on. Multi-cluster
+routing happens via a per-instance Cloudflare DNS A record pointing at
+`cluster.ingressIp`, not via a cluster-specific hostname in the URL itself. Stable
+for the lifetime of the instance. Never constructed by the client — the client reads
+it verbatim from the API. One instance has exactly one Instance URL regardless of how
+many agents run inside it. Synonyms in legacy code (`dashboardUrl`, `runtimeUrl`,
 `workspaceUrl`, `launchUrl`) all mean this same thing and should be migrated to
 `instanceUrl` / `url` (DB column name stays `instances.url`).
+Supersedes the cluster-host-based definition from ADR 0001 (hermes-hut) — see ADR
+0003, which also retired the auth mechanism (Access Token / Dashboard Session, below)
+that was built on top of the old definition.
 
-**Access Token**
-A one-time, short-lived token (`wst-` prefix) minted by the control plane when a user
-clicks Open. Embedded as `?token=wst-...` in the Instance URL for the initial browser
-navigation only. ForwardAuth validates and deletes it on first use (single-use),
-then sets a Dashboard Session cookie. TTL is 5 minutes — long enough to survive slow
-connections, short enough to be meaningless if leaked. Never reused, never shown to
-the user.
+**Cluster Debug Host**
+The admin/support-only URL `https://{bridgeWorkspaceId}.{cluster.runtimeBaseDomain}`
+(e.g. `ws-abc123....runtime-kh-test.hermeshq.net`). Exists for two reasons, neither of
+them user-facing: (1) it's the hostname Traefik issues its own per-cluster Let's
+Encrypt cert for — TLS-ALPN-01 needs a directly-reachable, non-Cloudflare-proxied
+host, which the Instance URL no longer is; (2) it lets an admin reach a specific
+cluster's Traefik directly when an instance's Instance-URL DNS record isn't active
+yet. Never shown in normal user-facing UI. Code name: `resolveClusterDebugUrl` /
+`clusterDebugHost` / `clusterDebugUrl` — use these names consistently, this term had
+four inconsistent names before ADR 0003.
 
-**Dashboard Session**
-A browser session established when a user opens their instance. Represented by an
+**Access Token** *(defunct — see ADR 0003)*
+Was a one-time, short-lived token (`wst-` prefix) minted by the control plane when a
+user clicks Open, used to bootstrap the Dashboard Session below. Retired along with
+ForwardAuth; kept here only so old references resolve to something.
+
+**Dashboard Session** *(defunct — see ADR 0003)*
+Was a browser session established when a user opens their instance. Represented by an
 HttpOnly, host-scoped cookie set by ForwardAuth after validating the one-time access
 token. TTL is 8 hours — covers a full working session. On expiry the user returns to
 the client and clicks Open; a fresh token is minted transparently. The user never
