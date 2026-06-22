@@ -32,6 +32,15 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read-only: the bridge never manages the prepuller DaemonSet itself (provisioning
+  # applies deploy/runtime-image-prepuller.yaml with cluster-admin access) — only reads
+  # its status for GetClusterSummary's Prepuller*/RuntimeImageWarmed fields. Missing this
+  # previously made every Get() return Forbidden, which admin_cluster.go's dsErr != nil
+  # branch silently treats the same as "DaemonSet not deployed" — runtimeImageWarmed
+  # reported false unconditionally regardless of the DaemonSet's real health.
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses", "networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
