@@ -23,6 +23,7 @@ var criticalPerms = []permCheck{
 	{"", "pods", "list"},
 	{"", "services", "create"},
 	{"apps", "deployments", "create"},
+	{"apps", "daemonsets", "get"},
 	{"networking.k8s.io", "networkpolicies", "create"},
 	{"traefik.io", "ingressroutes", "create"},
 	{"traefik.io", "middlewares", "create"},
