@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -13,39 +14,50 @@ const managedByLabel = "hermeshq/managed-by=bridge"
 
 // ClusterSummaryResponse is the payload for GET /v1/cluster/summary.
 type ClusterSummaryResponse struct {
-	ClusterID           string        `json:"clusterId"`
-	BridgeHealthy       bool          `json:"bridgeHealthy"`
-	KubernetesReachable bool          `json:"kubernetesReachable"`
-	NodeCount           int           `json:"nodeCount"`
-	InstanceCount       int           `json:"instanceCount"`
-	Pods                PodCounts     `json:"pods"`
-	Resources           ClusterLoad   `json:"resources"`
-	LastSeenAt          time.Time     `json:"lastSeenAt"`
-	Maintenance         bool          `json:"maintenance"`
-	Draining            bool          `json:"draining"`
+	ClusterID           string      `json:"clusterId"`
+	BridgeHealthy       bool        `json:"bridgeHealthy"`
+	KubernetesReachable bool        `json:"kubernetesReachable"`
+	NodeCount           int         `json:"nodeCount"`
+	InstanceCount       int         `json:"instanceCount"`
+	Pods                PodCounts   `json:"pods"`
+	Resources           ClusterLoad `json:"resources"`
+	LastSeenAt          time.Time   `json:"lastSeenAt"`
+	Maintenance         bool        `json:"maintenance"`
+	Draining            bool        `json:"draining"`
 	// HeadroomMiB is the estimated free memory available for new instances:
 	// allocatable - systemOverhead - reserved. Negative means the cluster is
 	// over-committed. Backend should exclude clusters where HeadroomMiB < 512
 	// (one instance memory request) from routing.
-	HeadroomMiB         int64         `json:"headroomMiB"`
+	HeadroomMiB int64 `json:"headroomMiB"`
+	// HeadroomUnknown is true when the node list call needed to compute
+	// HeadroomMiB failed (RBAC, timeout, etc). HeadroomMiB is 0 in that case —
+	// callers must not read that 0 as "no headroom"; check this flag first.
+	HeadroomUnknown bool `json:"headroomUnknown,omitempty"`
 	// RuntimeNodesTotal/RuntimeNodesReady and the Prepuller* fields are all read
 	// directly off the hermes-runtime-image-prepuller DaemonSet's own status — not a
 	// separate count — so "how many runtime nodes are there" and "how many have the
 	// image cached" can never drift apart from what the DaemonSet itself believes.
 	// All zero/empty when the DaemonSet hasn't been deployed yet (e.g. an older
-	// cluster, or a deploy that predates Step 4) — that's a real "not warmed" signal,
-	// not an error.
-	RuntimeNodesTotal      int    `json:"runtimeNodesTotal"`
-	RuntimeNodesReady      int    `json:"runtimeNodesReady"`
-	PrepullerDesired       int    `json:"prepullerDesired"`
-	PrepullerReady         int    `json:"prepullerReady"`
-	PrepullerUnavailable   int    `json:"prepullerUnavailable"`
-	RuntimeImageReference  string `json:"runtimeImageReference,omitempty"`
+	// cluster, or a deploy that predates Step 4) — that's a real "not warmed" signal.
+	// If the lookup itself failed instead (RBAC, timeout), that is NOT the same
+	// thing — see RuntimeImageStatusUnknown.
+	RuntimeNodesTotal     int    `json:"runtimeNodesTotal"`
+	RuntimeNodesReady     int    `json:"runtimeNodesReady"`
+	PrepullerDesired      int    `json:"prepullerDesired"`
+	PrepullerReady        int    `json:"prepullerReady"`
+	PrepullerUnavailable  int    `json:"prepullerUnavailable"`
+	RuntimeImageReference string `json:"runtimeImageReference,omitempty"`
 	// RuntimeImageWarmed is true only when every node the pre-puller targets has it
 	// cached (prepullerReady == prepullerDesired, and desired > 0). Backends should
 	// prefer routing creates to clusters where this is true and avoid placing the
 	// FIRST instance on a cluster where it's false — see docs on warm-node validation.
 	RuntimeImageWarmed bool `json:"runtimeImageWarmed"`
+	// RuntimeImageStatusUnknown is true when the DaemonSet lookup itself failed
+	// (RBAC, timeout) rather than returning a real "not deployed" or "not warmed"
+	// state. This previously could not be distinguished from a genuine cold cluster —
+	// the bridge's own ClusterRole missing the daemonsets grant made every cluster
+	// look permanently un-warmed. See deploy/rbac.yaml.
+	RuntimeImageStatusUnknown bool `json:"runtimeImageStatusUnknown,omitempty"`
 }
 
 // MaintenanceModeResponse is the payload for GET/PUT /v1/cluster/maintenance.
@@ -184,6 +196,11 @@ func (b *Bridge) GetClusterSummary(ctx context.Context) (ClusterSummaryResponse,
 			}
 		}
 		out.HeadroomMiB = allocatableMiB - systemOverheadMiB - out.Resources.ReservedMemoryMiB
+	} else {
+		// Don't let HeadroomMiB's zero value masquerade as "no headroom" — that
+		// would make a healthy cluster look full to the backend's routing filter.
+		out.HeadroomUnknown = true
+		b.Logger.Printf("[GetClusterSummary] Warning: re-list nodes for headroom failed: %v", nodeErr)
 	}
 
 	if ds, dsErr := b.KubeClient.AppsV1().DaemonSets("hermes-system").Get(ctx, "hermes-runtime-image-prepuller", metav1.GetOptions{}); dsErr == nil {
@@ -196,6 +213,12 @@ func (b *Bridge) GetClusterSummary(ctx context.Context) (ClusterSummaryResponse,
 			out.RuntimeImageReference = ds.Spec.Template.Spec.Containers[0].Image
 		}
 		out.RuntimeImageWarmed = out.PrepullerDesired > 0 && out.PrepullerReady == out.PrepullerDesired
+	} else if !apierrors.IsNotFound(dsErr) {
+		// NotFound is a real "DaemonSet isn't deployed" signal — leave the zero
+		// values as-is. Anything else (RBAC Forbidden, timeout) is "couldn't check",
+		// which previously looked identical to "checked, found nothing warmed".
+		out.RuntimeImageStatusUnknown = true
+		b.Logger.Printf("[GetClusterSummary] Warning: get prepuller DaemonSet failed: %v", dsErr)
 	}
 
 	return out, nil

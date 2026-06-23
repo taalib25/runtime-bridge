@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/release"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -80,12 +79,13 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		}
 	}
 
-	install := action.NewInstall(helmCfg)
-	install.ReleaseName = b.releaseName(spec.InstanceID)
-	install.Namespace = ns
-	install.CreateNamespace = createNS
-	install.SkipCRDs = true
-	install.Wait = false
+	installOpts := InstallOptions{
+		ReleaseName:     b.releaseName(spec.InstanceID),
+		Namespace:       ns,
+		CreateNamespace: createNS,
+		SkipCRDs:        true,
+		Wait:            false,
+	}
 
 	hasCORS := len(parseCORSOrigins(spec.CORSOrigins)) > 0
 	hasAuth := strings.TrimSpace(spec.ForwardAuthURL) != ""
@@ -101,7 +101,7 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		}
 	}
 
-	rel, err := install.RunWithContext(ctx, chart, values)
+	rel, err := b.Helm.Install(ctx, helmCfg, installOpts, chart, values)
 	if err != nil {
 		// --keep-history on delete leaves an uninstalled release; helm install rejects
 		// "cannot re-use a name that is still in use". Fall back to upgrade which
@@ -110,12 +110,8 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 			// --keep-history left an uninstalled release secret. helm upgrade also
 			// rejects it ("has no deployed releases"). Clean up the history secret
 			// so a fresh install can proceed.
-			cleanup := action.NewUninstall(helmCfg)
-			cleanup.KeepHistory = false
-			cleanup.IgnoreNotFound = true
-			cleanup.Wait = false
-			_, _ = cleanup.Run(install.ReleaseName)
-			rel, err = install.RunWithContext(ctx, chart, values)
+			_ = b.Helm.Uninstall(helmCfg, UninstallOptions{KeepHistory: false, IgnoreNotFound: true, Wait: false}, installOpts.ReleaseName)
+			rel, err = b.Helm.Install(ctx, helmCfg, installOpts, chart, values)
 		}
 		if err != nil {
 			b.trackOperation("create", "failure", started)
@@ -177,10 +173,7 @@ func (b *Bridge) DeleteInstance(ctx context.Context, instanceID string, purge bo
 		b.trackOperation("delete", "failure", started)
 		return fmt.Errorf("helm config: %w", err)
 	}
-	uninstall := action.NewUninstall(helmCfg)
-	uninstall.Wait = false
-	uninstall.KeepHistory = !purge
-	_, err = uninstall.Run(b.releaseName(instanceID))
+	err = b.Helm.Uninstall(helmCfg, UninstallOptions{Wait: false, KeepHistory: !purge}, b.releaseName(instanceID))
 	if err != nil {
 		if strings.Contains(err.Error(), "release: not found") ||
 			strings.Contains(err.Error(), "already uninstalled") {
@@ -261,10 +254,7 @@ func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		return nil, fmt.Errorf("helm config: %w", err)
 	}
 
-	upgrade := action.NewUpgrade(helmCfg)
-	upgrade.Namespace = ns
-	upgrade.SkipCRDs = true
-	upgrade.Wait = false
+	upgradeOpts := UpgradeOptions{Namespace: ns, SkipCRDs: true, Wait: false}
 
 	hasCORS := len(parseCORSOrigins(spec.CORSOrigins)) > 0
 	hasAuth := strings.TrimSpace(spec.ForwardAuthURL) != ""
@@ -280,7 +270,7 @@ func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		}
 	}
 
-	rel, err := upgrade.RunWithContext(ctx, b.releaseName(spec.InstanceID), chart, values)
+	rel, err := b.Helm.Upgrade(ctx, helmCfg, upgradeOpts, b.releaseName(spec.InstanceID), chart, values)
 	if err != nil {
 		b.trackOperation("update", "failure", started)
 		return nil, err
@@ -309,10 +299,7 @@ func (b *Bridge) ListInstances(ctx context.Context) ([]InstanceStatus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("helm config for all-namespace list: %w", err)
 	}
-	lister := action.NewList(allNsCfg)
-	lister.All = true
-	lister.AllNamespaces = true
-	releases, err := lister.Run()
+	releases, err := b.Helm.List(allNsCfg, ListOptions{All: true, AllNamespaces: true})
 	if err != nil {
 		b.Logger.Printf("[ListInstances] Helm list failed: %v", err)
 		return nil, err
@@ -615,11 +602,11 @@ func instanceSpecFromRelease(defaultInstanceID string, values map[string]any, na
 
 	spec := InstanceSpec{
 		InstanceID: instanceString(instanceValues, "instanceId", defaultInstanceID),
-		TenantID:    instanceString(instanceValues, "tenantId", ""),
-		ClusterID:   instanceString(instanceValues, "clusterId", clusterName),
-		Namespace:   instanceString(instanceValues, "namespace", namespace),
-		Image:       instanceString(instanceValues, "image", ""),
-		ImageTag:    instanceString(instanceValues, "imageTag", ""),
+		TenantID:   instanceString(instanceValues, "tenantId", ""),
+		ClusterID:  instanceString(instanceValues, "clusterId", clusterName),
+		Namespace:  instanceString(instanceValues, "namespace", namespace),
+		Image:      instanceString(instanceValues, "image", ""),
+		ImageTag:   instanceString(instanceValues, "imageTag", ""),
 		Resources: ResourceSpec{
 			CPURequest:    nestedString(instanceValues, "resources", "cpuRequest"),
 			CPULimit:      nestedString(instanceValues, "resources", "cpuLimit"),

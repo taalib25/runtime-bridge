@@ -207,6 +207,18 @@ those panels go blank.
 
 ---
 
+## 9. [OBSERVABILITY] `GET /v1/cluster/summary` gained `headroomUnknown` / `runtimeImageStatusUnknown`
+
+Both default to `false`/omitted and existing fields (`headroomMiB`, `runtimeImageWarmed`,
+`prepullerDesired`/`prepullerReady`) are unchanged in shape — this is additive, no action
+required to keep working. But if you want routing to actually benefit from it: when
+`headroomUnknown` or `runtimeImageStatusUnknown` is `true`, the bridge could not check
+(RBAC, timeout) rather than having checked and found zero/cold. Treat that the same as
+`KUBERNETES_UNREACHABLE` for routing purposes (exclude/deprioritize, don't read the
+zero-valued field as a real "no headroom" / "not warmed" signal) rather than ignoring it.
+
+---
+
 ## Checklist
 
 - [ ] Send `commonLabels` + `commonAnnotations` (`hermescloud.dev/*`) on create + PUT
