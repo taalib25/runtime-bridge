@@ -23,12 +23,13 @@ func helmTestBridge(t *testing.T) (*Bridge, *FakeHelmRunner) {
 
 func minimalSpec(b *Bridge, instanceID string) InstanceSpec {
 	spec := InstanceSpec{
-		InstanceID: instanceID,
-		TenantID:   "t1",
-		Image:      b.Config.RuntimeNodeCoreImage,
-		ImageTag:   b.Config.RuntimeNodeCoreImageTag,
-		Network:    NetworkSpec{Host: instanceID + ".hermeshq.net"},
-		Secrets:    map[string]string{"API_SERVER_KEY": "test-key"},
+		InstanceID:     instanceID,
+		TenantID:       "t1",
+		Image:          b.Config.RuntimeNodeCoreImage,
+		ImageTag:       b.Config.RuntimeNodeCoreImageTag,
+		Network:        NetworkSpec{Host: instanceID + ".hermeshq.net"},
+		Secrets:        map[string]string{"API_SERVER_KEY": "test-key"},
+		ForwardAuthURL: "https://api.hermeshq.test/internal/runtime-access",
 	}
 	// Mirrors decodeInstanceRequest: every real call site normalizes before
 	// CreateInstance/UpdateInstance ever see the spec.
@@ -191,6 +192,50 @@ func TestDeleteInstance_AlreadyUninstalled_IsNotAnError(t *testing.T) {
 // TODO: RollbackInstance and ListInstances are routed through HelmRunner (see
 // lifecycle.go / helm.go) but have no dedicated unit tests yet — they need a fake
 // release lookup (lookupRelease → b.Helm.List) wired up similarly to the above.
+
+func TestCreateInstance_RejectsWhenNoForwardAuthURLConfigured(t *testing.T) {
+	b, fakeHelm := helmTestBridge(t)
+	spec := minimalSpec(b, "ws-noauth000001")
+	spec.ForwardAuthURL = ""
+	// b.Config.DefaultForwardAuthURL is also unset by newTestBridge — no fallback either.
+
+	_, err := b.CreateInstance(context.Background(), spec)
+	if err == nil {
+		t.Fatal("expected CreateInstance to reject a spec with no ForwardAuth URL configured")
+	}
+	if len(fakeHelm.InstallCalls) != 0 {
+		t.Errorf("expected zero Install calls — must fail before touching Helm, got %d", len(fakeHelm.InstallCalls))
+	}
+}
+
+func TestCreateInstance_FallsBackToBridgeDefaultForwardAuthURL(t *testing.T) {
+	b, fakeHelm := helmTestBridge(t)
+	b.Config.DefaultForwardAuthURL = "https://api.hermeshq.test/internal/runtime-access"
+	spec := minimalSpec(b, "ws-default00001")
+	spec.ForwardAuthURL = ""
+
+	_, err := b.CreateInstance(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("expected the bridge-wide default to satisfy requireForwardAuth, got error: %v", err)
+	}
+	if len(fakeHelm.InstallCalls) != 1 {
+		t.Fatalf("expected exactly 1 Install call, got %d", len(fakeHelm.InstallCalls))
+	}
+}
+
+func TestUpdateInstance_RejectsWhenNoForwardAuthURLConfigured(t *testing.T) {
+	b, fakeHelm := helmTestBridge(t)
+	spec := minimalSpec(b, "ws-noauth000002")
+	spec.ForwardAuthURL = ""
+
+	_, err := b.UpdateInstance(context.Background(), spec)
+	if err == nil {
+		t.Fatal("expected UpdateInstance to reject a spec with no ForwardAuth URL configured")
+	}
+	if len(fakeHelm.UpgradeCalls) != 0 {
+		t.Errorf("expected zero Upgrade calls — must fail before touching Helm, got %d", len(fakeHelm.UpgradeCalls))
+	}
+}
 
 var errInstallNameReuse = fakeHelmError("cannot re-use a name that is still in use")
 var errReleaseNotFound = fakeHelmError("release: not found")

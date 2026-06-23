@@ -24,10 +24,10 @@ type Config struct {
 	HealthPath        string        `json:"healthPath" yaml:"healthPath"`
 	ReleasePrefix     string        `json:"releasePrefix" yaml:"releasePrefix"`
 	CreateNamespace   bool          `json:"createNamespace" yaml:"createNamespace"`
-	// DefaultForwardAuthURL is configured (env: BRIDGE_FORWARD_AUTH_URL) but currently DEAD:
-	// nothing applies it to spec.ForwardAuthURL when a create request omits the field, so
-	// ForwardAuth only ever activates if the caller sets forwardAuthURL explicitly (apps/server
-	// doesn't, as of 2026-06-19). TODO: either wire this default in, or remove it.
+	// DefaultForwardAuthURL (env: BRIDGE_FORWARD_AUTH_URL) is the ForwardAuth verify URL used
+	// when a create/update request omits spec.ForwardAuthURL. effectiveForwardAuthURL (helm.go)
+	// applies this fallback; requireForwardAuth fails the request if neither is set — an
+	// IngressRoute is never created without the runtime-auth middleware attached.
 	DefaultForwardAuthURL string `json:"defaultForwardAuthURL" yaml:"defaultForwardAuthURL"`
 	// DefaultCORSOrigins is a comma-separated list of allowed browser origins applied to every
 	// workspace that doesn't set corsOrigins explicitly.
@@ -53,24 +53,24 @@ type Config struct {
 	// RuntimeNodeCoreImageTag in the Helm values passed to the chart.
 	// Env: BRIDGE_RUNTIME_NODE_CORE_DIGEST
 	RuntimeNodeCoreImageDigest string `json:"runtimeNodeCoreImageDigest" yaml:"runtimeNodeCoreImageDigest"`
-	ConfigFile string `json:"-" yaml:"-"`
+	ConfigFile                 string `json:"-" yaml:"-"`
 }
 
 func DefaultConfig() Config {
 	return Config{
-		ListenAddress:           ":8080",
-		Namespace:               "default",
-		SyncInterval:            5 * time.Minute,
-		ShutdownTimeout:         10 * time.Second,
-		HTTPClientTimeout:       5 * time.Second,
-		OperationTimeout:        10 * time.Minute,
+		ListenAddress:     ":8080",
+		Namespace:         "default",
+		SyncInterval:      5 * time.Minute,
+		ShutdownTimeout:   10 * time.Second,
+		HTTPClientTimeout: 5 * time.Second,
+		OperationTimeout:  10 * time.Minute,
 		// The Hermes dashboard's liveness endpoint (HERMES_DASHBOARD_INSECURE=1 means the
 		// whole dashboard is unauthenticated anyway, but this stays the canonical health
 		// path regardless). (Plain /health 401s/404s → false unhealthy → would break
 		// status "ready" + auto-rollback restart/upgrade/repair/redeploy.)
-		HealthPath:              "/api/status",
-		ReleasePrefix:           "",
-		CreateNamespace:         false,
+		HealthPath:           "/api/status",
+		ReleasePrefix:        "",
+		CreateNamespace:      false,
 		RuntimeNodeCoreImage: "nousresearch/hermes-agent",
 		// Official upstream image. It ships the web dashboard as the `hermes dashboard`
 		// subcommand (port 9119), runs as root under tini (no s6), HERMES_HOME=/opt/data.
