@@ -26,6 +26,7 @@ func newTestBridge(secret string) *Bridge {
 		Config:      cfg,
 		ClusterName: cfg.ClusterName,
 		ChartPath:   cfg.ChartPath,
+		Helm:        realHelmRunner{}, // tests that need a fake override this field directly
 		HTTPClient:  &http.Client{Timeout: 5 * time.Second},
 		Logger:      log.New(os.Stdout, "test ", log.LstdFlags),
 		Metrics:     NewMetrics(cfg.ClusterName, prometheus.NewRegistry()),
@@ -609,8 +610,8 @@ func TestBuildValues_ImageSplitWithTag(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
-		TenantID:    "t1",
-		Image:       "nousresearch/hermes-agent:v2026.4.16",
+		TenantID:   "t1",
+		Image:      "nousresearch/hermes-agent:v2026.4.16",
 	}
 	vals, err := b.buildValues(spec)
 	if err != nil {
@@ -631,9 +632,9 @@ func TestBuildValues_DefaultImageUsesPinnedDigest(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
-		TenantID:    "t1",
-		Image:       b.Config.RuntimeNodeCoreImage,
-		ImageTag:    b.Config.RuntimeNodeCoreImageTag,
+		TenantID:   "t1",
+		Image:      b.Config.RuntimeNodeCoreImage,
+		ImageTag:   b.Config.RuntimeNodeCoreImageTag,
 	}
 	vals, err := b.buildValues(spec)
 	if err != nil {
@@ -655,9 +656,9 @@ func TestBuildValues_ImageTagOverride(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
-		TenantID:    "t1",
-		Image:       "nousresearch/hermes-agent",
-		ImageTag:    "v2026.6.5",
+		TenantID:   "t1",
+		Image:      "nousresearch/hermes-agent",
+		ImageTag:   "v2026.6.5",
 	}
 	vals, err := b.buildValues(spec)
 	if err != nil {
@@ -676,7 +677,7 @@ func TestBuildValues_IngressEnabled(t *testing.T) {
 	b := newTestBridge("s")
 	enabled := true
 	spec := InstanceSpec{
-		InstanceID:    "ws-1",
+		InstanceID:     "ws-1",
 		TenantID:       "t1",
 		Image:          "img",
 		IngressEnabled: &enabled,
@@ -696,8 +697,8 @@ func TestBuildValues_ResourcesSetCorrectly(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
-		TenantID:    "t1",
-		Image:       "img",
+		TenantID:   "t1",
+		Image:      "img",
 		Resources: ResourceSpec{
 			CPURequest:    "500m",
 			MemoryRequest: "1Gi",
