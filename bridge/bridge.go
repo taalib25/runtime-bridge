@@ -35,8 +35,11 @@ import (
 const sharedSecretHeader = "X-Bridge-Secret"
 
 type Bridge struct {
-	Config         Config
-	HelmConfig     *action.Configuration
+	Config     Config
+	HelmConfig *action.Configuration
+	// Helm is the seam onto the Helm SDK (see helmrunner.go) — production code always
+	// gets realHelmRunner{}; tests substitute a FakeHelmRunner.
+	Helm HelmRunner
 	// kubernetes.Interface (not *kubernetes.Clientset) so tests can substitute
 	// k8s.io/client-go/kubernetes/fake — both implement it identically in production.
 	KubeClient     kubernetes.Interface
@@ -50,8 +53,8 @@ type Bridge struct {
 	Metrics        *Metrics
 
 	ready          atomic.Bool
-	maintenance    atomic.Bool // true → reject new instance creates; set via PUT /v1/cluster/maintenance
-	draining       atomic.Bool // true → drain in progress; prevents concurrent drains
+	maintenance    atomic.Bool  // true → reject new instance creates; set via PUT /v1/cluster/maintenance
+	draining       atomic.Bool  // true → drain in progress; prevents concurrent drains
 	permMissing    atomic.Value // []string; set once at startup by checkPermissions(); nil = check not run
 	runner         *OperationRunner
 	pendingCreates sync.Map // instanceID → pendingCreate; throttles duplicate creates
@@ -61,7 +64,7 @@ type Bridge struct {
 
 type execToken struct {
 	instanceID string
-	expiry      time.Time
+	expiry     time.Time
 }
 
 type pendingCreate struct {
@@ -93,6 +96,7 @@ func NewBridge(cfg Config) (*Bridge, error) {
 	bridge := &Bridge{
 		Config:         cfg,
 		HelmConfig:     actionConfig,
+		Helm:           realHelmRunner{},
 		KubeClient:     kubeClient,
 		DynamicClient:  dynamicClient,
 		RESTConfig:     restConfig,
@@ -100,9 +104,9 @@ func NewBridge(cfg Config) (*Bridge, error) {
 		KubeconfigPath: cfg.KubeconfigPath,
 		ChartPath:      cfg.ChartPath,
 		HTTPClient:     &http.Client{Timeout: cfg.HTTPClientTimeout},
-		Logger:  log.New(os.Stdout, "bridge ", log.LstdFlags|log.LUTC),
-		Metrics: NewMetrics(cfg.ClusterName, nil),
-		runner:  newOperationRunner(cfg.OperationTimeout),
+		Logger:         log.New(os.Stdout, "bridge ", log.LstdFlags|log.LUTC),
+		Metrics:        NewMetrics(cfg.ClusterName, nil),
+		runner:         newOperationRunner(cfg.OperationTimeout),
 	}
 
 	bridge.ready.Store(true)
@@ -633,10 +637,7 @@ func (b *Bridge) lookupRelease(_ context.Context, instanceID string) (*release.R
 	if err != nil {
 		return nil, fmt.Errorf("helm config for workspace %s: %w", instanceID, err)
 	}
-	lister := action.NewList(helmCfg)
-	lister.All = true
-	lister.Filter = fmt.Sprintf("^%s$", releaseName)
-	releases, err := lister.Run()
+	releases, err := b.Helm.List(helmCfg, ListOptions{All: true, Filter: fmt.Sprintf("^%s$", releaseName)})
 	if err != nil {
 		return nil, err
 	}
@@ -691,7 +692,6 @@ func errInstanceNotFound(instanceID string) error {
 func isInstanceNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not found")
 }
-
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")

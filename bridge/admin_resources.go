@@ -11,14 +11,14 @@ import (
 
 // ResourcesResponse is the payload for GET /v1/instances/{id}/resources.
 type ResourcesResponse struct {
-	InstanceID string             `json:"instanceId"`
-	Namespace   string             `json:"namespace"`
-	Deployments []DeploymentInfo   `json:"deployments"`
-	Pods        []PodInfo          `json:"pods"`
-	Services    []ServiceInfo      `json:"services"`
-	PVCs        []PVCInfo          `json:"pvcs"`
-	Secrets     []SecretMeta       `json:"secrets"`
-	Ingress     []IngressInfo      `json:"ingress"`
+	InstanceID  string           `json:"instanceId"`
+	Namespace   string           `json:"namespace"`
+	Deployments []DeploymentInfo `json:"deployments"`
+	Pods        []PodInfo        `json:"pods"`
+	Services    []ServiceInfo    `json:"services"`
+	PVCs        []PVCInfo        `json:"pvcs"`
+	Secrets     []SecretMeta     `json:"secrets"`
+	Ingress     []IngressInfo    `json:"ingress"`
 }
 
 type DeploymentInfo struct {
@@ -29,11 +29,11 @@ type DeploymentInfo struct {
 }
 
 type PodInfo struct {
-	Name         string `json:"name"`
-	Phase        string `json:"phase"`
-	Ready        bool   `json:"ready"`
-	NodeName     string `json:"nodeName,omitempty"`
-	RestartCount int32  `json:"restartCount"`
+	Name          string `json:"name"`
+	Phase         string `json:"phase"`
+	Ready         bool   `json:"ready"`
+	NodeName      string `json:"nodeName,omitempty"`
+	RestartCount  int32  `json:"restartCount"`
 	WaitingReason string `json:"waitingReason,omitempty"`
 }
 
@@ -53,13 +53,13 @@ type PVCInfo struct {
 
 // SecretMeta lists secret key names only — values are never returned.
 type SecretMeta struct {
-	Name      string   `json:"name"`
-	KeyNames  []string `json:"keyNames"`
+	Name     string   `json:"name"`
+	KeyNames []string `json:"keyNames"`
 }
 
 type IngressInfo struct {
-	Name  string `json:"name"`
-	Kind  string `json:"kind"`
+	Name  string   `json:"name"`
+	Kind  string   `json:"kind"`
 	Hosts []string `json:"hosts,omitempty"`
 }
 
@@ -77,7 +77,7 @@ func (b *Bridge) GetInstanceResources(ctx context.Context, instanceID string) (R
 
 	out := ResourcesResponse{
 		InstanceID: instanceID,
-		Namespace:   ns,
+		Namespace:  ns,
 	}
 
 	// Deployments
@@ -130,19 +130,18 @@ func (b *Bridge) GetInstanceResources(ctx context.Context, instanceID string) (R
 		for _, p := range svc.Spec.Ports {
 			ports = append(ports, p.Port)
 		}
-		hasEP := false
-		if ep, epErr := b.KubeClient.CoreV1().Endpoints(ns).Get(ctx, svc.Name, metav1.GetOptions{}); epErr == nil {
-			for _, sub := range ep.Subsets {
-				if len(sub.Addresses) > 0 {
-					hasEP = true
-					break
-				}
-			}
+		// Reuse endpointReadiness rather than re-deriving hasEndpoints with a raw
+		// Endpoints.Get — that inline version had the same bug endpointReadiness
+		// was written to fix: a lookup failure (RBAC, timeout) silently became
+		// hasEndpoints=false, indistinguishable from "really has no endpoints".
+		_, ready, _, readinessErr := b.endpointReadiness(ctx, ns, svc.Name)
+		if readinessErr != nil {
+			b.Logger.Printf("[GetInstanceResources] Warning: endpoint readiness check failed for %s/%s: %v", ns, svc.Name, readinessErr)
 		}
 		out.Services = append(out.Services, ServiceInfo{
 			Name:         svc.Name,
 			ClusterIP:    svc.Spec.ClusterIP,
-			HasEndpoints: hasEP,
+			HasEndpoints: ready > 0,
 			Ports:        ports,
 		})
 	}
@@ -195,6 +194,8 @@ func (b *Bridge) GetInstanceResources(ctx context.Context, instanceID string) (R
 					Hosts: hosts,
 				})
 			}
+		} else {
+			b.Logger.Printf("[GetInstanceResources] Warning: list IngressRoutes for %s failed: %v", ns, irErr)
 		}
 	}
 

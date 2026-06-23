@@ -4,15 +4,28 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	helmrelease "helm.sh/helm/v3/pkg/release"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	helmrelease "helm.sh/helm/v3/pkg/release"
 )
+
+// InstanceEvent is a normalized Kubernetes event for a workspace resource.
+type InstanceEvent struct {
+	Type      string    `json:"type"`
+	Reason    string    `json:"reason"`
+	Message   string    `json:"message"`
+	Component string    `json:"component,omitempty"`
+	Object    string    `json:"object,omitempty"`
+	Count     int32     `json:"count"`
+	FirstTime time.Time `json:"firstTime"`
+	LastTime  time.Time `json:"lastTime"`
+}
 
 func (b *Bridge) GetInstanceStatus(ctx context.Context, instanceID string) (InstanceStatus, error) {
 	rel, err := b.lookupRelease(ctx, instanceID)
@@ -24,14 +37,14 @@ func (b *Bridge) GetInstanceStatus(ctx context.Context, instanceID string) (Inst
 	if rel.Info != nil && rel.Info.Status == helmrelease.StatusUninstalled {
 		spec, _ := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
 		return InstanceStatus{
-			InstanceID: instanceID,
-			ClusterID:   b.ClusterName,
-			ReleaseName: rel.Name,
-			Namespace:   rel.Namespace,
-			Phase:       "deleted",
-			CreatedAt:   rel.Info.FirstDeployed.Time.UTC(),
+			InstanceID:    instanceID,
+			ClusterID:     b.ClusterName,
+			ReleaseName:   rel.Name,
+			Namespace:     rel.Namespace,
+			Phase:         "deleted",
+			CreatedAt:     rel.Info.FirstDeployed.Time.UTC(),
 			LastCheckedAt: time.Now().UTC(),
-			Spec:        spec,
+			Spec:          spec,
 		}, nil
 	}
 	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
@@ -55,7 +68,7 @@ func (b *Bridge) collectInstanceStatus(ctx context.Context, spec InstanceSpec, r
 	}
 
 	status := InstanceStatus{
-		InstanceID:   spec.InstanceID,
+		InstanceID:    spec.InstanceID,
 		ClusterID:     spec.ClusterID,
 		ReleaseName:   releaseName,
 		Namespace:     namespace,
@@ -401,4 +414,173 @@ func selectPod(items []corev1.Pod) *corev1.Pod {
 		return running
 	}
 	return newest
+}
+
+// GetInstanceEvents returns the 50 most recent Kubernetes events for resources
+// belonging to this workspace release (deployment, pods, PVCs, service).
+func (b *Bridge) GetInstanceEvents(ctx context.Context, instanceID string) ([]InstanceEvent, error) {
+	rel, err := b.lookupRelease(ctx, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	ns := rel.Namespace
+	releaseName := rel.Name
+
+	// Build an allowlist of resource names owned by this release.
+	relevant := map[string]bool{releaseName: true}
+	selector := labels.Set{"app.kubernetes.io/instance": releaseName}.AsSelector().String()
+
+	// Each List below is best-effort: a failure here narrows the allowlist (we
+	// see fewer events than exist), not an error worth failing the whole call
+	// for. But it must be logged — silently swallowing it looks identical to
+	// "this release legitimately has no pods/pvcs/replicasets", which it isn't.
+	pods, err := b.KubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err == nil {
+		for i := range pods.Items {
+			relevant[pods.Items[i].Name] = true
+		}
+	} else {
+		b.Logger.Printf("[GetInstanceEvents] Warning: list pods for %s/%s failed: %v", ns, releaseName, err)
+	}
+	pvcs, err := b.KubeClient.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err == nil {
+		for i := range pvcs.Items {
+			relevant[pvcs.Items[i].Name] = true
+		}
+	} else {
+		b.Logger.Printf("[GetInstanceEvents] Warning: list pvcs for %s/%s failed: %v", ns, releaseName, err)
+	}
+	replicasets, err := b.KubeClient.AppsV1().ReplicaSets(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err == nil {
+		for i := range replicasets.Items {
+			relevant[replicasets.Items[i].Name] = true
+		}
+	} else {
+		b.Logger.Printf("[GetInstanceEvents] Warning: list replicasets for %s/%s failed: %v", ns, releaseName, err)
+	}
+
+	list, err := b.KubeClient.CoreV1().Events(ns).List(ctx, metav1.ListOptions{Limit: 200})
+	if err != nil {
+		return nil, fmt.Errorf("list events: %w", err)
+	}
+
+	events := make([]InstanceEvent, 0, len(list.Items))
+	for _, ev := range list.Items {
+		if !relevant[ev.InvolvedObject.Name] {
+			continue
+		}
+		lastTime := ev.LastTimestamp.Time
+		if lastTime.IsZero() {
+			lastTime = ev.EventTime.Time
+		}
+		events = append(events, InstanceEvent{
+			Type:      ev.Type,
+			Reason:    ev.Reason,
+			Message:   ev.Message,
+			Component: ev.Source.Component,
+			Object:    fmt.Sprintf("%s/%s", ev.InvolvedObject.Kind, ev.InvolvedObject.Name),
+			Count:     ev.Count,
+			FirstTime: ev.FirstTimestamp.Time,
+			LastTime:  lastTime,
+		})
+	}
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].LastTime.After(events[j].LastTime)
+	})
+	if len(events) > 50 {
+		events = events[:50]
+	}
+	return events, nil
+}
+
+// deploymentReady returns true when the deployment's rollout is complete:
+// all desired replicas are updated, ready, and available, and the observed
+// generation has caught up. Returns an error string if the deployment has
+// exceeded its ProgressDeadline (terminal failure).
+func deploymentReady(dep *appsv1.Deployment) (bool, string) {
+	for _, c := range dep.Status.Conditions {
+		if c.Type == appsv1.DeploymentProgressing && c.Reason == "ProgressDeadlineExceeded" {
+			return false, fmt.Sprintf("deployment %s exceeded progress deadline: %s", dep.Name, c.Message)
+		}
+	}
+	desired := int32(1)
+	if dep.Spec.Replicas != nil {
+		desired = *dep.Spec.Replicas
+	}
+	if dep.Status.ObservedGeneration < dep.Generation {
+		return false, ""
+	}
+	return dep.Status.UpdatedReplicas >= desired &&
+		dep.Status.ReadyReplicas >= desired &&
+		dep.Status.AvailableReplicas >= desired, ""
+}
+
+// waitForDeploymentReady polls until the deployment rollout is fully complete
+// or the context deadline passes. Fails fast on ProgressDeadlineExceeded.
+func (b *Bridge) waitForDeploymentReady(ctx context.Context, ns, releaseName string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// Check immediately before waiting for the first tick.
+	if dep, err := b.KubeClient.AppsV1().Deployments(ns).Get(ctx, releaseName, metav1.GetOptions{}); err == nil {
+		if ok, fatal := deploymentReady(dep); fatal != "" {
+			return fmt.Errorf("%s", fatal)
+		} else if ok {
+			return nil
+		}
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("deployment %s/%s did not become ready within %s", ns, releaseName, timeout)
+		case <-ticker.C:
+			dep, err := b.KubeClient.AppsV1().Deployments(ns).Get(ctx, releaseName, metav1.GetOptions{})
+			if err != nil {
+				continue
+			}
+			if ok, fatal := deploymentReady(dep); fatal != "" {
+				return fmt.Errorf("%s", fatal)
+			} else if ok {
+				return nil
+			}
+		}
+	}
+}
+
+// waitForInstanceHealth polls the internal health probe until it returns 2xx or the context deadline passes.
+func (b *Bridge) waitForInstanceHealth(ctx context.Context, instanceID string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	rel, err := b.lookupRelease(ctx, instanceID)
+	if err != nil {
+		return err
+	}
+	spec, err := instanceSpecFromRelease(instanceID, rel.Config, rel.Namespace, b.ClusterName)
+	if err != nil {
+		return fmt.Errorf("reconstruct spec for health wait: %w", err)
+	}
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// Check immediately before waiting for the first tick.
+	if healthy, _, _ := b.checkInstanceHealth(ctx, spec); healthy {
+		return nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("instance %s did not become healthy within %s", instanceID, timeout)
+		case <-ticker.C:
+			if healthy, _, _ := b.checkInstanceHealth(ctx, spec); healthy {
+				return nil
+			}
+		}
+	}
 }

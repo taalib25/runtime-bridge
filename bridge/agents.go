@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	agentTemplateLabelKey   = "hermes.ai/type"
-	agentTemplateLabelValue = "agent-template"
-	agentTemplateDataKey    = "template.json"
+	agentTemplateLabelKey     = "hermes.ai/type"
+	agentTemplateLabelValue   = "agent-template"
+	agentTemplateDataKey      = "template.json"
 	appliedTemplateAnnotation = "hermes.ai/applied-template"
 )
 
@@ -156,12 +156,16 @@ func (b *Bridge) ApplyAgentTemplate(ctx context.Context, instanceID, agentID str
 
 	// Annotate the workspace namespace so GetInstanceAgent can identify the applied template.
 	ns, err := b.KubeClient.CoreV1().Namespaces().Get(ctx, rel.Namespace, metav1.GetOptions{})
-	if err == nil {
+	if err != nil {
+		b.Logger.Printf("[ApplyAgentTemplate] Warning: get namespace %s failed, applied-template annotation not written: %v", rel.Namespace, err)
+	} else {
 		if ns.Annotations == nil {
 			ns.Annotations = map[string]string{}
 		}
 		ns.Annotations[appliedTemplateAnnotation] = agentID
-		_, _ = b.KubeClient.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
+		if _, updErr := b.KubeClient.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); updErr != nil {
+			b.Logger.Printf("[ApplyAgentTemplate] Warning: update namespace %s failed, applied-template annotation not written: %v", rel.Namespace, updErr)
+		}
 	}
 
 	b.Logger.Printf("[ApplyAgentTemplate] Applied template %s to instance %s", agentID, instanceID)

@@ -26,6 +26,7 @@ func newTestBridge(secret string) *Bridge {
 		Config:      cfg,
 		ClusterName: cfg.ClusterName,
 		ChartPath:   cfg.ChartPath,
+		Helm:        realHelmRunner{}, // tests that need a fake override this field directly
 		HTTPClient:  &http.Client{Timeout: 5 * time.Second},
 		Logger:      log.New(os.Stdout, "test ", log.LstdFlags),
 		Metrics:     NewMetrics(cfg.ClusterName, prometheus.NewRegistry()),
@@ -609,8 +610,8 @@ func TestBuildValues_ImageSplitWithTag(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
-		TenantID:    "t1",
-		Image:       "nousresearch/hermes-agent:v2026.4.16",
+		TenantID:   "t1",
+		Image:      "nousresearch/hermes-agent:v2026.4.16",
 	}
 	vals, err := b.buildValues(spec)
 	if err != nil {
@@ -625,15 +626,57 @@ func TestBuildValues_ImageSplitWithTag(t *testing.T) {
 	}
 }
 
+func TestBuildValues_ServiceIsAlwaysClusterIP(t *testing.T) {
+	b := newTestBridge("s")
+	spec := InstanceSpec{InstanceID: "ws-1", TenantID: "t1"}
+	vals, err := b.buildValues(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := vals["service"].(map[string]any)
+	if service["type"] != "ClusterIP" {
+		t.Errorf("expected service.type=ClusterIP, got %v", service["type"])
+	}
+}
+
+func TestRequireClusterIPService(t *testing.T) {
+	cases := []struct {
+		serviceType string
+		wantErr     bool
+	}{
+		{"ClusterIP", false},
+		{"", false},
+		{"NodePort", true},
+		{"LoadBalancer", true},
+		{"ExternalName", true},
+	}
+	for _, tc := range cases {
+		values := map[string]any{"service": map[string]any{"type": tc.serviceType}}
+		err := requireClusterIPService(values)
+		if tc.wantErr && err == nil {
+			t.Errorf("service.type=%q: expected an error, got nil", tc.serviceType)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("service.type=%q: unexpected error: %v", tc.serviceType, err)
+		}
+	}
+}
+
+func TestRequireClusterIPService_NoServiceKeyIsAllowed(t *testing.T) {
+	if err := requireClusterIPService(map[string]any{}); err != nil {
+		t.Errorf("expected no error when values has no service key, got %v", err)
+	}
+}
+
 // When the image/tag match the bridge's own defaults, buildValues prefers the pinned
 // digest over the floating ":latest" tag — that's the whole point of pinning it.
 func TestBuildValues_DefaultImageUsesPinnedDigest(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
-		TenantID:    "t1",
-		Image:       b.Config.RuntimeNodeCoreImage,
-		ImageTag:    b.Config.RuntimeNodeCoreImageTag,
+		TenantID:   "t1",
+		Image:      b.Config.RuntimeNodeCoreImage,
+		ImageTag:   b.Config.RuntimeNodeCoreImageTag,
 	}
 	vals, err := b.buildValues(spec)
 	if err != nil {
@@ -655,9 +698,9 @@ func TestBuildValues_ImageTagOverride(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
-		TenantID:    "t1",
-		Image:       "nousresearch/hermes-agent",
-		ImageTag:    "v2026.6.5",
+		TenantID:   "t1",
+		Image:      "nousresearch/hermes-agent",
+		ImageTag:   "v2026.6.5",
 	}
 	vals, err := b.buildValues(spec)
 	if err != nil {
@@ -676,7 +719,7 @@ func TestBuildValues_IngressEnabled(t *testing.T) {
 	b := newTestBridge("s")
 	enabled := true
 	spec := InstanceSpec{
-		InstanceID:    "ws-1",
+		InstanceID:     "ws-1",
 		TenantID:       "t1",
 		Image:          "img",
 		IngressEnabled: &enabled,
@@ -696,8 +739,8 @@ func TestBuildValues_ResourcesSetCorrectly(t *testing.T) {
 	b := newTestBridge("s")
 	spec := InstanceSpec{
 		InstanceID: "ws-1",
-		TenantID:    "t1",
-		Image:       "img",
+		TenantID:   "t1",
+		Image:      "img",
 		Resources: ResourceSpec{
 			CPURequest:    "500m",
 			MemoryRequest: "1Gi",

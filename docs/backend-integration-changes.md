@@ -207,6 +207,39 @@ those panels go blank.
 
 ---
 
+## 9. [OBSERVABILITY] `GET /v1/cluster/summary` gained `headroomUnknown` / `runtimeImageStatusUnknown`
+
+Both default to `false`/omitted and existing fields (`headroomMiB`, `runtimeImageWarmed`,
+`prepullerDesired`/`prepullerReady`) are unchanged in shape — this is additive, no action
+required to keep working. But if you want routing to actually benefit from it: when
+`headroomUnknown` or `runtimeImageStatusUnknown` is `true`, the bridge could not check
+(RBAC, timeout) rather than having checked and found zero/cold. Treat that the same as
+`KUBERNETES_UNREACHABLE` for routing purposes (exclude/deprioritize, don't read the
+zero-valued field as a real "no headroom" / "not warmed" signal) rather than ignoring it.
+
+---
+
+## 10. [BREAKING] `forwardAuthURL` is no longer optional
+
+`CreateInstance`/`UpdateInstance` now **reject the request** (before touching Helm or
+Kubernetes) if neither `spec.forwardAuthURL` nor the bridge's own `BRIDGE_FORWARD_AUTH_URL`
+default is set. An IngressRoute is never created without the `runtime-auth` ForwardAuth
+middleware attached — a missing middleware was previously possible (silently, if
+`forwardAuthURL` was omitted and no bridge-wide default existed) and is now a hard error.
+If your bridge deployment already sets `BRIDGE_FORWARD_AUTH_URL` (it should — see
+`deploy/deployment.yaml`), no caller-side change is needed; this only breaks callers that
+were relying on the previously-silent unauthenticated-ingress fallback.
+
+## 11. [HARDENING] Runtime Service is now explicitly `ClusterIP`, enforced server-side
+
+`buildValues` now sets `service.type: ClusterIP` explicitly (previously implicit via the
+chart default) and the bridge rejects any computed values where `service.type` is
+`NodePort`/`LoadBalancer`/anything else before calling Helm. There is currently no spec
+field that lets a caller request a different service type, so this is defense-in-depth,
+not a behavior change for existing callers.
+
+---
+
 ## Checklist
 
 - [ ] Send `commonLabels` + `commonAnnotations` (`hermescloud.dev/*`) on create + PUT
@@ -221,3 +254,4 @@ those panels go blank.
 - [ ] Confirm delete `?purge` usage; expect async + supersede
 - [ ] Resend `API_SERVER_KEY` on every PUT
 - [ ] Migrate dashboards/billing from `hermes.ai/plan` → `hermescloud.dev/plan`
+- [ ] Confirm `BRIDGE_FORWARD_AUTH_URL` is set on every bridge deployment, or send `forwardAuthURL` explicitly on every create/update — both omitted now hard-fails the request

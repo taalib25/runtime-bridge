@@ -11,16 +11,43 @@ import (
 	"strings"
 	"time"
 
-	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/release"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// effectiveForwardAuthURL returns the ForwardAuth verify URL to use for this instance:
+// spec.ForwardAuthURL if the caller set one, else the bridge-wide BRIDGE_FORWARD_AUTH_URL
+// default. Falling back to the bridge default is what makes ForwardAuth non-optional —
+// see requireForwardAuth.
+func (b *Bridge) effectiveForwardAuthURL(spec InstanceSpec) string {
+	if url := strings.TrimSpace(spec.ForwardAuthURL); url != "" {
+		return url
+	}
+	return strings.TrimSpace(b.Config.DefaultForwardAuthURL)
+}
+
+// requireForwardAuth fails fast, before any Kubernetes or Helm resource is touched, if
+// no ForwardAuth verify URL is configured (neither spec.ForwardAuthURL nor the bridge's
+// BRIDGE_FORWARD_AUTH_URL default). An IngressRoute is never created without the
+// runtime-auth middleware attached — a missing middleware is a security bug, not a
+// degraded mode, so this is a hard error rather than a silent unauthenticated route.
+func (b *Bridge) requireForwardAuth(spec InstanceSpec) error {
+	if b.effectiveForwardAuthURL(spec) == "" {
+		return fmt.Errorf("no ForwardAuth URL configured (spec.forwardAuthURL or BRIDGE_FORWARD_AUTH_URL) — refusing to create an unauthenticated runtime ingress")
+	}
+	return nil
+}
+
 func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*release.Release, error) {
 	started := time.Now()
 	b.Logger.Printf("[CreateInstance] Starting for instance %s, tenant %s", spec.InstanceID, spec.TenantID)
+
+	if err := b.requireForwardAuth(spec); err != nil {
+		b.trackOperation("create", "failure", started)
+		return nil, err
+	}
 
 	chart, err := loader.Load(b.ChartPath)
 	if err != nil {
@@ -80,18 +107,20 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		}
 	}
 
-	install := action.NewInstall(helmCfg)
-	install.ReleaseName = b.releaseName(spec.InstanceID)
-	install.Namespace = ns
-	install.CreateNamespace = createNS
-	install.SkipCRDs = true
-	install.Wait = false
+	installOpts := InstallOptions{
+		ReleaseName:     b.releaseName(spec.InstanceID),
+		Namespace:       ns,
+		CreateNamespace: createNS,
+		SkipCRDs:        true,
+		Wait:            false,
+	}
 
 	hasCORS := len(parseCORSOrigins(spec.CORSOrigins)) > 0
-	hasAuth := strings.TrimSpace(spec.ForwardAuthURL) != ""
+	forwardAuthURL := b.effectiveForwardAuthURL(spec)
+	hasAuth := forwardAuthURL != ""
 
 	if hasAuth {
-		if err := b.EnsureForwardAuthMiddleware(ctx, ns, strings.TrimSpace(spec.ForwardAuthURL)); err != nil {
+		if err := b.EnsureForwardAuthMiddleware(ctx, ns, forwardAuthURL); err != nil {
 			b.Logger.Printf("[CreateInstance] Warning: failed to create ForwardAuth middleware: %v", err)
 		}
 	}
@@ -101,7 +130,7 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		}
 	}
 
-	rel, err := install.RunWithContext(ctx, chart, values)
+	rel, err := b.Helm.Install(ctx, helmCfg, installOpts, chart, values)
 	if err != nil {
 		// --keep-history on delete leaves an uninstalled release; helm install rejects
 		// "cannot re-use a name that is still in use". Fall back to upgrade which
@@ -110,12 +139,8 @@ func (b *Bridge) CreateInstance(ctx context.Context, spec InstanceSpec) (*releas
 			// --keep-history left an uninstalled release secret. helm upgrade also
 			// rejects it ("has no deployed releases"). Clean up the history secret
 			// so a fresh install can proceed.
-			cleanup := action.NewUninstall(helmCfg)
-			cleanup.KeepHistory = false
-			cleanup.IgnoreNotFound = true
-			cleanup.Wait = false
-			_, _ = cleanup.Run(install.ReleaseName)
-			rel, err = install.RunWithContext(ctx, chart, values)
+			_ = b.Helm.Uninstall(helmCfg, UninstallOptions{KeepHistory: false, IgnoreNotFound: true, Wait: false}, installOpts.ReleaseName)
+			rel, err = b.Helm.Install(ctx, helmCfg, installOpts, chart, values)
 		}
 		if err != nil {
 			b.trackOperation("create", "failure", started)
@@ -177,10 +202,7 @@ func (b *Bridge) DeleteInstance(ctx context.Context, instanceID string, purge bo
 		b.trackOperation("delete", "failure", started)
 		return fmt.Errorf("helm config: %w", err)
 	}
-	uninstall := action.NewUninstall(helmCfg)
-	uninstall.Wait = false
-	uninstall.KeepHistory = !purge
-	_, err = uninstall.Run(b.releaseName(instanceID))
+	err = b.Helm.Uninstall(helmCfg, UninstallOptions{Wait: false, KeepHistory: !purge}, b.releaseName(instanceID))
 	if err != nil {
 		if strings.Contains(err.Error(), "release: not found") ||
 			strings.Contains(err.Error(), "already uninstalled") {
@@ -242,6 +264,12 @@ func (b *Bridge) writeTombstone(ctx context.Context, instanceID string) {
 
 func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*release.Release, error) {
 	started := time.Now()
+
+	if err := b.requireForwardAuth(spec); err != nil {
+		b.trackOperation("update", "failure", started)
+		return nil, err
+	}
+
 	chart, err := loader.Load(b.ChartPath)
 	if err != nil {
 		b.trackOperation("update", "failure", started)
@@ -261,16 +289,14 @@ func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		return nil, fmt.Errorf("helm config: %w", err)
 	}
 
-	upgrade := action.NewUpgrade(helmCfg)
-	upgrade.Namespace = ns
-	upgrade.SkipCRDs = true
-	upgrade.Wait = false
+	upgradeOpts := UpgradeOptions{Namespace: ns, SkipCRDs: true, Wait: false}
 
 	hasCORS := len(parseCORSOrigins(spec.CORSOrigins)) > 0
-	hasAuth := strings.TrimSpace(spec.ForwardAuthURL) != ""
+	forwardAuthURL := b.effectiveForwardAuthURL(spec)
+	hasAuth := forwardAuthURL != ""
 
 	if hasAuth {
-		if err := b.EnsureForwardAuthMiddleware(ctx, ns, strings.TrimSpace(spec.ForwardAuthURL)); err != nil {
+		if err := b.EnsureForwardAuthMiddleware(ctx, ns, forwardAuthURL); err != nil {
 			b.Logger.Printf("[UpdateInstance] Warning: failed to update ForwardAuth middleware: %v", err)
 		}
 	}
@@ -280,7 +306,7 @@ func (b *Bridge) UpdateInstance(ctx context.Context, spec InstanceSpec) (*releas
 		}
 	}
 
-	rel, err := upgrade.RunWithContext(ctx, b.releaseName(spec.InstanceID), chart, values)
+	rel, err := b.Helm.Upgrade(ctx, helmCfg, upgradeOpts, b.releaseName(spec.InstanceID), chart, values)
 	if err != nil {
 		b.trackOperation("update", "failure", started)
 		return nil, err
@@ -309,10 +335,7 @@ func (b *Bridge) ListInstances(ctx context.Context) ([]InstanceStatus, error) {
 	if err != nil {
 		return nil, fmt.Errorf("helm config for all-namespace list: %w", err)
 	}
-	lister := action.NewList(allNsCfg)
-	lister.All = true
-	lister.AllNamespaces = true
-	releases, err := lister.Run()
+	releases, err := b.Helm.List(allNsCfg, ListOptions{All: true, AllNamespaces: true})
 	if err != nil {
 		b.Logger.Printf("[ListInstances] Helm list failed: %v", err)
 		return nil, err
@@ -420,8 +443,11 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		// Two listeners: the dashboard (9119, routed on the main host as the tenant surface)
 		// and the OpenAI-compatible API server (8642, reachable in-pod via localhost and
 		// in-cluster via the Service). The main ingress points at the dashboard (RuntimePort).
+		// type is always ClusterIP — the runtime Service must never be reachable except
+		// through Traefik's ForwardAuth-gated IngressRoute. See requireClusterIPService.
 		"service": map[string]any{
 			"enabled": true,
+			"type":    "ClusterIP",
 			"ports": []any{
 				map[string]any{"name": "dashboard", "port": dashboardPort, "targetPort": dashboardPort, "protocol": "TCP"},
 				map[string]any{"name": "api-server", "port": apiServerPort, "targetPort": apiServerPort, "protocol": "TCP"},
@@ -537,7 +563,7 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 		if strings.TrimSpace(spec.CORSOrigins) != "" {
 			middlewareParts = append(middlewareParts, corsAnnotation(ns))
 		}
-		if strings.TrimSpace(spec.ForwardAuthURL) != "" {
+		if b.effectiveForwardAuthURL(spec) != "" {
 			middlewareParts = append(middlewareParts, forwardAuthAnnotation(ns))
 		}
 		if len(middlewareParts) > 0 {
@@ -603,7 +629,30 @@ func (b *Bridge) buildValues(spec InstanceSpec) (map[string]any, error) {
 	}
 	values["env"] = spec.EnvMap
 
+	if err := requireClusterIPService(values); err != nil {
+		return nil, err
+	}
+
 	return values, nil
+}
+
+// requireClusterIPService is the last line of defense against a runtime Service ever
+// being reachable outside the cluster except through Traefik's ForwardAuth-gated
+// IngressRoute. NodePort opens the port on every node's host IP; LoadBalancer
+// provisions a cloud LB with a public IP — both bypass ForwardAuth entirely. This
+// rejects the Helm values before they ever reach Install/Upgrade.
+func requireClusterIPService(values map[string]any) error {
+	service, ok := values["service"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	serviceType, _ := service["type"].(string)
+	switch serviceType {
+	case "", "ClusterIP":
+		return nil
+	default:
+		return fmt.Errorf("runtime service.type %q is not allowed — must be ClusterIP (got %q, which would bypass ForwardAuth)", serviceType, serviceType)
+	}
 }
 
 func instanceSpecFromRelease(defaultInstanceID string, values map[string]any, namespace, clusterName string) (InstanceSpec, error) {
@@ -615,11 +664,11 @@ func instanceSpecFromRelease(defaultInstanceID string, values map[string]any, na
 
 	spec := InstanceSpec{
 		InstanceID: instanceString(instanceValues, "instanceId", defaultInstanceID),
-		TenantID:    instanceString(instanceValues, "tenantId", ""),
-		ClusterID:   instanceString(instanceValues, "clusterId", clusterName),
-		Namespace:   instanceString(instanceValues, "namespace", namespace),
-		Image:       instanceString(instanceValues, "image", ""),
-		ImageTag:    instanceString(instanceValues, "imageTag", ""),
+		TenantID:   instanceString(instanceValues, "tenantId", ""),
+		ClusterID:  instanceString(instanceValues, "clusterId", clusterName),
+		Namespace:  instanceString(instanceValues, "namespace", namespace),
+		Image:      instanceString(instanceValues, "image", ""),
+		ImageTag:   instanceString(instanceValues, "imageTag", ""),
 		Resources: ResourceSpec{
 			CPURequest:    nestedString(instanceValues, "resources", "cpuRequest"),
 			CPULimit:      nestedString(instanceValues, "resources", "cpuLimit"),
